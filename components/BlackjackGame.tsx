@@ -170,6 +170,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
         // Atualiza a UI com o novo saldo retornado pelo servidor
         updateBalance(secureBalance); 
 
+        // CRUCIAL: Remove o loader ANTES de começar a animação
+        setIsProcessing(false);
+
         setLastBet(bet);
         setMessage('');
         setResult(GameResult.None);
@@ -208,8 +211,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
 
         setDecisionTimer(10);
         setStatus(GameStatus.Playing);
-        setIsProcessing(false); // Libera o jogo
-
+        
     } catch (error) {
         console.error("Erro crítico na aposta:", error);
         alert("Erro ao processar aposta no servidor. Tente novamente.");
@@ -506,7 +508,13 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
                 )}
 
                 {(status === GameStatus.Idle || status === GameStatus.Betting || status === GameStatus.Dealing) && (
-                    <div className="animate-fade-in scale-90 md:scale-100 transition-opacity duration-300" style={{ opacity: status === GameStatus.Dealing ? 0 : 1 }}>
+                    <div 
+                        className="animate-fade-in scale-90 md:scale-100 transition-opacity duration-300" 
+                        style={{ 
+                            opacity: status === GameStatus.Dealing ? 0 : 1,
+                            pointerEvents: status === GameStatus.Dealing ? 'none' : 'auto' // Evita cliques durante animação
+                        }}
+                    >
                         <GameControls 
                             status={status}
                             currentBet={bet}
