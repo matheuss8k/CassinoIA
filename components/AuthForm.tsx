@@ -196,7 +196,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
         <div className="relative z-10">
           <div className="text-center mb-4">
             <h1 className="text-3xl font-extrabold text-white mb-1 tracking-tight">CASSINO IA</h1>
-            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">Experiência Premium</p>
+            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">O Primeiro Cassino IA do Brasil!</p>
           </div>
 
           {/* Compact Tabs */}
