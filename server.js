@@ -42,6 +42,7 @@ const connectDB = async () => {
 // Define User Schema
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
+  email: { type: String, required: true, unique: true }, // Novo campo
   cpf: { type: String, required: true },
   birthDate: { type: String, required: true },
   password: { type: String, required: true },
@@ -55,29 +56,42 @@ const User = mongoose.model('User', userSchema);
 // Registro
 app.post('/api/register', async (req, res) => {
   try {
-    const { username, cpf, birthDate, password } = req.body;
+    const { username, email, cpf, birthDate, password } = req.body;
 
-    if (!username || !password || !cpf) {
+    if (!username || !email || !password || !cpf || !birthDate) {
         return res.status(400).json({ message: 'Preencha todos os campos.' });
     }
 
-    const userExists = await User.findOne({ username });
+    // Verifica se usuário ou email já existem
+    const userExists = await User.findOne({ 
+        $or: [
+            { username: username }, 
+            { email: email }
+        ] 
+    });
+
     if (userExists) {
-      return res.status(400).json({ message: 'Usuário já existe.' });
+      if (userExists.username === username) {
+          return res.status(400).json({ message: 'Este nome de usuário já está em uso.' });
+      }
+      if (userExists.email === email) {
+          return res.status(400).json({ message: 'Este email já está cadastrado.' });
+      }
     }
 
     const user = await User.create({
-      username, cpf, birthDate, password, balance: 1000
+      username, email, cpf, birthDate, password, balance: 1000
     });
 
     res.status(201).json({
       id: user._id,
       username: user.username,
+      email: user.email,
       balance: user.balance
     });
   } catch (error) {
     console.error('Erro registro:', error);
-    res.status(500).json({ message: 'Erro ao criar conta.' });
+    res.status(500).json({ message: 'Erro ao criar conta. Tente novamente.' });
   }
 });
 
@@ -85,12 +99,15 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+    
+    // Permite login por username OU email (opcional, aqui mantive username, mas ajustável)
     const user = await User.findOne({ username });
 
     if (user && user.password === password) {
       res.json({
         id: user._id,
         username: user.username,
+        email: user.email,
         cpf: user.cpf,
         balance: user.balance
       });
@@ -148,15 +165,11 @@ app.post('/api/game/payout', async (req, res) => {
 });
 
 // --- SERVIR FRONTEND ---
-// Serve os arquivos estáticos se a pasta 'dist' existir, independente do ambiente.
-// Isso evita erros 404/500 se alguém tentar rodar o build localmente.
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
   
-  // Rota catch-all para SPA (React Router)
   app.get('*', (req, res) => {
-    // Evita interceptar rotas de API que não foram tratadas acima
     if (req.path.startsWith('/api')) {
       return res.status(404).json({ message: 'Endpoint API não encontrado' });
     }

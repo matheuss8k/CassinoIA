@@ -22,6 +22,7 @@ export interface Card {
 export interface User {
   id: string;
   username: string;
+  email: string; // Novo campo
   cpf: string;
   birthDate?: string;
   balance: number;

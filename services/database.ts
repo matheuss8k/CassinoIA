@@ -1,16 +1,11 @@
 import { User } from '../types';
 
-// The API URL will be relative because of the Vite proxy in dev 
-// and same-origin in production.
-const API_URL = '/api';
+// Detecta a URL da API baseada no ambiente.
+// Em desenvolvimento (Vite proxy) e Produção (Express serving static), '/api' funciona bem.
+// Mas permite override via .env se necessário.
+const API_URL = import.meta.env?.VITE_API_URL || '/api';
 
 export const DatabaseService = {
-  // Find user is not exposed publicly for security, handled by login now
-  findUser: async (username: string): Promise<User | undefined> => {
-     // This method is deprecated in favor of direct login, but keeping signature safe
-     return undefined;
-  },
-
   // Create a new user via API
   createUser: async (userData: Omit<User, 'id' | 'balance'>): Promise<User> => {
     const response = await fetch(`${API_URL}/register`, {
