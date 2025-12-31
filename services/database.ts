@@ -45,7 +45,7 @@ export const DatabaseService = {
     return data;
   },
 
-  // Update user balance via API
+  // Update user balance via API (Wallet only)
   updateBalance: async (userId: string, newBalance: number): Promise<void> => {
     const response = await fetch(`${API_URL}/balance`, {
       method: 'POST',
@@ -57,5 +57,41 @@ export const DatabaseService = {
       const data = await response.json();
       console.error('Failed to sync balance:', data.message);
     }
+  },
+
+  // --- SECURE GAME TRANSACTIONS ---
+  
+  // Deduz aposta atomicamente no servidor
+  placeBet: async (userId: string, amount: number): Promise<number> => {
+    const response = await fetch(`${API_URL}/game/bet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, amount }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Erro ao processar aposta');
+    }
+
+    return data.newBalance;
+  },
+
+  // Processa pagamento no servidor
+  settleGame: async (userId: string, amount: number): Promise<number> => {
+    const response = await fetch(`${API_URL}/game/payout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, amount }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Erro ao processar pagamento');
+    }
+
+    return data.newBalance;
   }
 };

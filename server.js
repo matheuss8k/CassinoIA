@@ -13,7 +13,7 @@ app.use(express.json());
 
 // --- CONFIGURAÇÃO DE EMERGÊNCIA ---
 // Se você não consegue abrir o arquivo .env, cole sua URL de conexão dentro das aspas abaixo:
-const FALLBACK_MONGO_URI = 'mongodb+srv://admin_blackjack:VvWKYE6KW%40frd5z@cassinoia.kgyqt51.mongodb.net/?retryWrites=true&w=majority&appName=CassinoIA'; 
+const FALLBACK_MONGO_URI = ''; 
 
 // MongoDB Connection
 const connectDB = async () => {
@@ -117,7 +117,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Update Balance
+// Update Balance (Generic - Wallet)
 app.post('/api/balance', async (req, res) => {
   try {
     const { userId, newBalance } = req.body;
@@ -126,7 +126,7 @@ app.post('/api/balance', async (req, res) => {
     if (user) {
       user.balance = newBalance;
       await user.save();
-      console.log(`💰 Saldo atualizado para ${user.username}: R$ ${newBalance}`);
+      console.log(`💰 Carteira atualizada para ${user.username}: R$ ${newBalance}`);
       res.json({ balance: user.balance });
     } else {
       res.status(404).json({ message: 'Usuário não encontrado' });
@@ -134,6 +134,55 @@ app.post('/api/balance', async (req, res) => {
   } catch (error) {
     console.error('Erro ao atualizar saldo:', error);
     res.status(500).json({ message: error.message });
+  }
+});
+
+// GAME TRANSACTION: PLACE BET (Deduct)
+// Critical for Anti-F5: Deducts immediately on server
+app.post('/api/game/bet', async (req, res) => {
+  try {
+    const { userId, amount } = req.body;
+    
+    // Atomic update to prevent race conditions
+    // Only updates if balance is sufficient ($gte)
+    const user = await User.findOneAndUpdate(
+      { _id: userId, balance: { $gte: amount } },
+      { $inc: { balance: -amount } },
+      { new: true }
+    );
+
+    if (user) {
+      console.log(`🎲 Aposta iniciada ${user.username}: -R$ ${amount}`);
+      res.json({ success: true, newBalance: user.balance });
+    } else {
+      res.status(400).json({ success: false, message: 'Saldo insuficiente ou usuário inválido' });
+    }
+  } catch (error) {
+    console.error('Erro na aposta:', error);
+    res.status(500).json({ message: 'Erro ao processar aposta' });
+  }
+});
+
+// GAME TRANSACTION: PAYOUT (Add)
+app.post('/api/game/payout', async (req, res) => {
+  try {
+    const { userId, amount } = req.body;
+    
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { balance: amount } },
+      { new: true }
+    );
+
+    if (user) {
+      console.log(`🏆 Pagamento realizado ${user.username}: +R$ ${amount}`);
+      res.json({ success: true, newBalance: user.balance });
+    } else {
+      res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+  } catch (error) {
+    console.error('Erro no pagamento:', error);
+    res.status(500).json({ message: 'Erro ao processar pagamento' });
   }
 });
 

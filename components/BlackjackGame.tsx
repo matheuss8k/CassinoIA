@@ -4,7 +4,8 @@ import { createDeck, shuffleDeck, calculateScore } from '../services/gameLogic';
 import { CardComponent } from './CardComponent';
 import { GameControls } from './GameControls';
 import { AISuggestion } from './AISuggestion';
-import { Info } from 'lucide-react';
+import { DatabaseService } from '../services/database'; // Import DatabaseService
+import { Info, Lock } from 'lucide-react';
 
 interface BlackjackGameProps {
   user: User;
@@ -83,6 +84,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
   const [result, setResult] = useState<GameResult>(GameResult.None);
   const [message, setMessage] = useState<string>('');
   
+  // State de Processamento (Blindagem UI)
+  const [isProcessing, setIsProcessing] = useState(false);
+
   // Timers
   const [bettingTimer, setBettingTimer] = useState<number>(10);
   const [decisionTimer, setDecisionTimer] = useState<number>(10);
@@ -129,9 +133,12 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
     setMessage('');
     setBet(0);
     setBettingTimer(10);
+    setIsProcessing(false);
   };
 
   const handleBet = (amount: number) => {
+    if (isProcessing) return; // Prevent betting while processing
+
     if (amount === 0) {
       setBet(0);
       return;
@@ -145,55 +152,74 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
   };
 
   const dealCards = async () => {
-    if (bet === 0) return;
+    if (bet === 0 || isProcessing) return;
     
     if (bet > user.balance) {
       alert("Saldo insuficiente para iniciar a rodada.");
       return;
     }
 
-    setLastBet(bet);
-    setMessage('');
-    setResult(GameResult.None);
-    updateBalance(user.balance - bet);
-    
-    setStatus(GameStatus.Dealing);
-    const newDeck = shuffleDeck(createDeck());
-    const pHand: Card[] = [];
-    const dHand: Card[] = [];
+    // BLINDAGEM: Inicia processamento, trava botões
+    setIsProcessing(true);
 
-    await new Promise(r => setTimeout(r, 400));
-    pHand.push(newDeck.pop()!);
-    setPlayerHand([...pHand]);
-    setDeck(newDeck);
-    playSound('card');
+    try {
+        // BLINDAGEM: Deduz saldo no SERVIDOR PRIMEIRO
+        // Se der F5 agora, o dinheiro já foi.
+        const secureBalance = await DatabaseService.placeBet(user.id, bet);
+        
+        // Atualiza a UI com o novo saldo retornado pelo servidor
+        updateBalance(secureBalance); 
 
-    await new Promise(r => setTimeout(r, 400));
-    dHand.push(newDeck.pop()!);
-    setDealerHand([...dHand]);
-    setDeck(newDeck);
-    playSound('card');
+        setLastBet(bet);
+        setMessage('');
+        setResult(GameResult.None);
+        
+        setStatus(GameStatus.Dealing);
+        const newDeck = shuffleDeck(createDeck());
+        const pHand: Card[] = [];
+        const dHand: Card[] = [];
 
-    await new Promise(r => setTimeout(r, 400));
-    pHand.push(newDeck.pop()!);
-    setPlayerHand([...pHand]);
-    setDeck(newDeck);
-    playSound('card');
+        // Animação das cartas (Só começa se o servidor confirmar a aposta)
+        await new Promise(r => setTimeout(r, 400));
+        pHand.push(newDeck.pop()!);
+        setPlayerHand([...pHand]);
+        setDeck(newDeck);
+        playSound('card');
 
-    await new Promise(r => setTimeout(r, 400));
-    const cardToHide = newDeck.pop()!;
-    const hiddenCard = { ...cardToHide, isHidden: true };
-    dHand.push(hiddenCard);
-    setDealerHand([...dHand]);
-    setDeck(newDeck);
-    playSound('card');
+        await new Promise(r => setTimeout(r, 400));
+        dHand.push(newDeck.pop()!);
+        setDealerHand([...dHand]);
+        setDeck(newDeck);
+        playSound('card');
 
-    setDecisionTimer(10);
-    setStatus(GameStatus.Playing);
+        await new Promise(r => setTimeout(r, 400));
+        pHand.push(newDeck.pop()!);
+        setPlayerHand([...pHand]);
+        setDeck(newDeck);
+        playSound('card');
+
+        await new Promise(r => setTimeout(r, 400));
+        const cardToHide = newDeck.pop()!;
+        const hiddenCard = { ...cardToHide, isHidden: true };
+        dHand.push(hiddenCard);
+        setDealerHand([...dHand]);
+        setDeck(newDeck);
+        playSound('card');
+
+        setDecisionTimer(10);
+        setStatus(GameStatus.Playing);
+        setIsProcessing(false); // Libera o jogo
+
+    } catch (error) {
+        console.error("Erro crítico na aposta:", error);
+        alert("Erro ao processar aposta no servidor. Tente novamente.");
+        setIsProcessing(false);
+        setBet(0); // Reseta aposta visual em caso de falha
+    }
   };
 
   const handleHit = () => {
-    if (status !== GameStatus.Playing) return;
+    if (status !== GameStatus.Playing || isProcessing) return;
     
     setDecisionTimer(10);
     
@@ -211,6 +237,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
   };
 
   const handleStand = () => {
+    if (isProcessing) return;
     setStatus(GameStatus.DealerTurn);
   };
 
@@ -297,7 +324,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
     }
   };
 
-  const endGame = (res: GameResult) => {
+  const endGame = async (res: GameResult) => {
+    // BLINDAGEM: Trava interações durante finalização
+    setIsProcessing(true);
     setResult(res);
     
     let payout = 0;
@@ -317,11 +346,19 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
       playSound('lose');
     }
 
+    // BLINDAGEM: Processa pagamento no servidor
     if (payout > 0) {
-      updateBalance(user.balance + payout);
+        try {
+            const secureBalance = await DatabaseService.settleGame(user.id, payout);
+            updateBalance(secureBalance);
+        } catch (error) {
+            console.error("Erro ao pagar prêmio:", error);
+            // Em produção, isso iria para uma fila de 'retry' ou log de auditoria
+        }
     }
 
     setStatus(GameStatus.GameOver);
+    setIsProcessing(false);
 
     setTimeout(() => {
       setPlayerHand([]);
@@ -338,14 +375,14 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
   const isDealerHidden = dealerHand.some(c => c.isHidden);
   
   // Flag para acionar animação de vitória
-  // MODIFICADO: Só chove moedas se for Blackjack ou se o jogador ganhar com soma 21
   const showWinAnimation = status === GameStatus.GameOver && (
       result === GameResult.Blackjack || 
       (result === GameResult.PlayerWin && playerScore === 21)
   );
   
-  // Flag para mostrar container de aposta
-  const showBetInfo = status === GameStatus.Playing || status === GameStatus.DealerTurn;
+  // SOLICITAÇÃO ATENDIDA: Exibir info da aposta assim que houver aposta (> 0)
+  // Ou se o jogo já estiver rolando (proteção para transição rápida)
+  const showBetInfo = bet > 0;
 
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
@@ -382,11 +419,18 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
                 </ul>
             </div>
             
-            {/* Bet Info - Always rendered but toggles opacity to prevent layout shift */}
-            <div className={`transition-opacity duration-500 ${showBetInfo ? 'opacity-100' : 'opacity-0'}`}>
-                <div className="bg-gradient-to-br from-casino-gold to-yellow-600 rounded-2xl p-1 shadow-lg">
-                    <div className="bg-slate-900 rounded-xl p-4 text-center">
-                        <div className="text-xs text-slate-400 uppercase tracking-widest mb-1">Aposta em Jogo</div>
+            {/* Bet Info - Agora aparece IMEDIATAMENTE ao apostar */}
+            <div className={`transition-all duration-300 transform ${showBetInfo ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+                <div className={`rounded-2xl p-1 shadow-lg ${status !== GameStatus.Idle ? 'bg-gradient-to-br from-casino-gold to-yellow-600 animate-pulse-gold' : 'bg-slate-700'}`}>
+                    <div className="bg-slate-900 rounded-xl p-4 text-center relative overflow-hidden">
+                        {status !== GameStatus.Idle && (
+                            <div className="absolute top-2 right-2 text-casino-gold">
+                                <Lock size={12} />
+                            </div>
+                        )}
+                        <div className="text-xs text-slate-400 uppercase tracking-widest mb-1">
+                            {status === GameStatus.Idle ? 'Sua Aposta' : 'Aposta em Jogo'}
+                        </div>
                         <div className="text-2xl font-bold text-white">R$ {bet.toFixed(2)}</div>
                     </div>
                 </div>
@@ -454,8 +498,15 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
 
             {/* Center Controls - Increased padding and min-height here */}
             <div className="flex-none flex justify-center items-center w-full px-4 py-6 z-40 min-h-[120px]">
-                {(status === GameStatus.Idle || status === GameStatus.Betting) && (
-                    <div className="animate-fade-in scale-90 md:scale-100">
+                {/* Loader Overlay during server processing */}
+                {isProcessing && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] rounded-3xl">
+                        <div className="w-8 h-8 border-4 border-casino-gold border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                )}
+
+                {(status === GameStatus.Idle || status === GameStatus.Betting || status === GameStatus.Dealing) && (
+                    <div className="animate-fade-in scale-90 md:scale-100 transition-opacity duration-300" style={{ opacity: status === GameStatus.Dealing ? 0 : 1 }}>
                         <GameControls 
                             status={status}
                             currentBet={bet}

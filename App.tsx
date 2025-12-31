@@ -49,7 +49,7 @@ const App: React.FC = () => {
   return (
     <div className="h-screen w-screen bg-slate-950 text-white font-sans overflow-hidden flex flex-col relative">
       
-      {/* GLOBAL BACKGROUND LAYER - Ajustado para ser MUITO sutil e ficar ao fundo */}
+      {/* GLOBAL BACKGROUND LAYER - Fixo atrás de tudo (z-0) */}
       <div 
         className="fixed inset-0 pointer-events-none z-0" 
         style={{
@@ -57,7 +57,7 @@ const App: React.FC = () => {
             radial-gradient(circle at 0% 50%, rgba(88, 28, 135, 0.08) 0%, transparent 40%),
             radial-gradient(circle at 100% 0%, rgba(251, 191, 36, 0.02) 0%, transparent 30%) 
           `
-          /* Gold reduzido para 0.02 (2%) e movido para o canto superior direito (100% 0%) */
+          /* Gold reduzido para 0.02 (2%) e movido para o canto superior direito para não atrapalhar o texto */
         }}
       />
 
@@ -79,7 +79,7 @@ const App: React.FC = () => {
                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-casino-gold to-yellow-600 flex items-center justify-center font-bold text-black shadow-lg shadow-yellow-500/20 text-xs">
                  IA
                </div>
-               <span className="font-bold hidden sm:block text-sm tracking-wider">CASINO AI</span>
+               <span className="font-bold hidden sm:block text-sm tracking-wider">CASSINO IA</span>
              </div>
            </div>
 
