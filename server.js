@@ -6,37 +6,53 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ENV = process.env.NODE_ENV || 'development';
 
-// Middleware
-app.use(cors());
+// --- CONFIGURAÇÃO DE CORS ---
+// Lista de origens permitidas para acessar sua API
+const allowedOrigins = [
+  'http://localhost:5173',       // Vite Local
+  'http://localhost:3000',       // Teste de build local
+  'https://seucassino.com.br',   // SEU DOMÍNIO DE PRODUÇÃO (Configure no Render)
+  'https://www.seucassino.com.br',
+  // O Render adiciona o domínio onrender.com automaticamente, 
+  // mas é bom garantir que seu frontend consiga falar com o backend se estiverem separados.
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permite conexões sem origem (como Postman ou Apps Mobile)
+    // Permite conexões de Desenvolvimento (localhost)
+    // Permite conexões da lista allowedOrigins
+    if (!origin || allowedOrigins.indexOf(origin) !== -1 || ENV === 'development') {
+      callback(null, true);
+    } else {
+      console.warn(`Bloqueio CORS para origem: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// --- CONFIGURAÇÃO DE EMERGÊNCIA ---
-// Se você não consegue abrir o arquivo .env, cole sua URL de conexão dentro das aspas abaixo:
-const FALLBACK_MONGO_URI = ''; 
-
-// MongoDB Connection
+// --- BANCO DE DADOS ---
 const connectDB = async () => {
   try {
-    // Tenta pegar do .env, se falhar ou estiver vazio, usa o FALLBACK hardcoded acima
-    const mongoURI = process.env.MONGODB_URI || FALLBACK_MONGO_URI;
+    const mongoURI = process.env.MONGODB_URI;
     
-    // Verificação de segurança para ajudar o iniciante
-    if (!mongoURI || mongoURI.includes('SUA_SENHA_AQUI') || (mongoURI === '' && !process.env.MONGODB_URI)) {
-      console.error('\n❌ ERRO CRÍTICO: O Banco de Dados não está configurado!');
-      console.log('---------------------------------------------------------');
-      console.log('Opção 1 (Padrão): Abra o arquivo ".env" e cole sua URL de conexão.');
-      console.log('Opção 2 (Alternativa): Abra este arquivo "server.js" e cole sua URL na variável FALLBACK_MONGO_URI na linha 17.');
-      console.log('---------------------------------------------------------\n');
+    if (!mongoURI) {
+      console.error('\n❌ ERRO: MONGODB_URI não definida no .env!');
       return;
     }
 
-    console.log('🔄 Tentando conectar ao MongoDB...');
-    const conn = await mongoose.connect(mongoURI);
-    console.log(`✅ MongoDB Conectado com Sucesso: ${conn.connection.host}`);
+    console.log(`🔄 [${ENV.toUpperCase()}] Conectando ao MongoDB...`);
+    await mongoose.connect(mongoURI);
+    console.log(`✅ MongoDB Conectado!`);
   } catch (error) {
-    console.error(`❌ Erro na conexão com o MongoDB: ${error.message}`);
-    console.log('Dica: Verifique se sua senha está correta e se seu IP está liberado no MongoDB Atlas.');
+    console.error(`❌ Erro MongoDB: ${error.message}`);
+    process.exit(1);
   }
 };
 
@@ -51,9 +67,9 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// API Routes
+// --- ROTAS DA API ---
 
-// Register
+// Registro
 app.post('/api/register', async (req, res) => {
   try {
     const { username, cpf, birthDate, password } = req.body;
@@ -64,32 +80,21 @@ app.post('/api/register', async (req, res) => {
 
     const userExists = await User.findOne({ username });
     if (userExists) {
-      return res.status(400).json({ message: 'Este nome de usuário já está em uso.' });
+      return res.status(400).json({ message: 'Usuário já existe.' });
     }
 
     const user = await User.create({
-      username,
-      cpf,
-      birthDate,
-      password,
-      balance: 1000 // Saldo inicial
+      username, cpf, birthDate, password, balance: 1000
     });
 
-    if (user) {
-      console.log(`👤 Novo usuário registrado: ${user.username}`);
-      res.status(201).json({
-        id: user._id,
-        username: user.username,
-        cpf: user.cpf,
-        birthDate: user.birthDate,
-        balance: user.balance
-      });
-    } else {
-      res.status(400).json({ message: 'Dados inválidos' });
-    }
+    res.status(201).json({
+      id: user._id,
+      username: user.username,
+      balance: user.balance
+    });
   } catch (error) {
-    console.error('Erro no registro:', error);
-    res.status(500).json({ message: 'Erro ao criar conta. Tente novamente.' });
+    console.error('Erro registro:', error);
+    res.status(500).json({ message: 'Erro ao criar conta.' });
   }
 });
 
@@ -100,101 +105,77 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ username });
 
     if (user && user.password === password) {
-      console.log(`🔓 Login realizado: ${user.username}`);
       res.json({
         id: user._id,
         username: user.username,
         cpf: user.cpf,
-        birthDate: user.birthDate,
         balance: user.balance
       });
     } else {
-      res.status(401).json({ message: 'Usuário ou senha incorretos.' });
+      res.status(401).json({ message: 'Credenciais inválidas.' });
     }
   } catch (error) {
-    console.error('Erro no login:', error);
-    res.status(500).json({ message: 'Erro ao conectar com o servidor.' });
+    res.status(500).json({ message: 'Erro no servidor.' });
   }
 });
 
-// Update Balance (Generic - Wallet)
+// Atualizar Saldo (Carteira)
 app.post('/api/balance', async (req, res) => {
   try {
     const { userId, newBalance } = req.body;
-    const user = await User.findById(userId);
-
-    if (user) {
-      user.balance = newBalance;
-      await user.save();
-      console.log(`💰 Carteira atualizada para ${user.username}: R$ ${newBalance}`);
-      res.json({ balance: user.balance });
-    } else {
-      res.status(404).json({ message: 'Usuário não encontrado' });
-    }
+    const user = await User.findByIdAndUpdate(userId, { balance: newBalance }, { new: true });
+    if (user) res.json({ balance: user.balance });
+    else res.status(404).json({ message: 'Usuário não encontrado' });
   } catch (error) {
-    console.error('Erro ao atualizar saldo:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// GAME TRANSACTION: PLACE BET (Deduct)
-// Critical for Anti-F5: Deducts immediately on server
+// Aposta (Deduzir)
 app.post('/api/game/bet', async (req, res) => {
   try {
     const { userId, amount } = req.body;
-    
-    // Atomic update to prevent race conditions
-    // Only updates if balance is sufficient ($gte)
     const user = await User.findOneAndUpdate(
       { _id: userId, balance: { $gte: amount } },
       { $inc: { balance: -amount } },
       { new: true }
     );
 
-    if (user) {
-      console.log(`🎲 Aposta iniciada ${user.username}: -R$ ${amount}`);
-      res.json({ success: true, newBalance: user.balance });
-    } else {
-      res.status(400).json({ success: false, message: 'Saldo insuficiente ou usuário inválido' });
-    }
+    if (user) res.json({ success: true, newBalance: user.balance });
+    else res.status(400).json({ success: false, message: 'Saldo insuficiente' });
   } catch (error) {
-    console.error('Erro na aposta:', error);
-    res.status(500).json({ message: 'Erro ao processar aposta' });
+    res.status(500).json({ message: 'Erro na aposta' });
   }
 });
 
-// GAME TRANSACTION: PAYOUT (Add)
+// Pagamento (Adicionar)
 app.post('/api/game/payout', async (req, res) => {
   try {
     const { userId, amount } = req.body;
-    
     const user = await User.findByIdAndUpdate(
       userId,
       { $inc: { balance: amount } },
       { new: true }
     );
-
-    if (user) {
-      console.log(`🏆 Pagamento realizado ${user.username}: +R$ ${amount}`);
-      res.json({ success: true, newBalance: user.balance });
-    } else {
-      res.status(404).json({ message: 'Usuário não encontrado' });
-    }
+    if (user) res.json({ success: true, newBalance: user.balance });
+    else res.status(404).json({ message: 'Usuário não encontrado' });
   } catch (error) {
-    console.error('Erro no pagamento:', error);
-    res.status(500).json({ message: 'Erro ao processar pagamento' });
+    res.status(500).json({ message: 'Erro no pagamento' });
   }
 });
 
-// Serve static assets in production
-if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV !== 'development') {
+// --- SERVIR FRONTEND EM PRODUÇÃO ---
+// Se estiver rodando no Render (NODE_ENV=production), o Node serve o site React
+if (ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'dist')));
+  
+  // Qualquer rota que não seja /api devolve o index.html (SPA)
   app.get('*', (req, res) => {
     res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
   });
 }
 
-// Start Server
+// Iniciar
 connectDB().then(() => {
-  app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+  app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT} [${ENV}]`));
 });
