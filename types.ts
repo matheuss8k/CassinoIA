@@ -21,8 +21,9 @@ export interface Card {
 
 export interface User {
   id: string;
+  fullName: string; // Novo campo
   username: string;
-  email: string; // Novo campo
+  email: string;
   cpf: string;
   birthDate?: string;
   balance: number;

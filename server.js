@@ -46,9 +46,10 @@ const connectDB = async () => {
 
 // Define User Schema
 const userSchema = new mongoose.Schema({
+  fullName: { type: String, required: true }, // Novo Campo
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
-  cpf: { type: String, required: true },
+  cpf: { type: String, required: true, unique: true }, // CPF Único
   birthDate: { type: String, required: true },
   password: { type: String, required: true },
   balance: { type: Number, default: 1000 }
@@ -61,21 +62,25 @@ const User = mongoose.model('User', userSchema);
 // Registro
 app.post('/api/register', async (req, res) => {
   try {
-    const { username, email, cpf, birthDate, password } = req.body;
+    const { fullName, username, email, cpf, birthDate, password } = req.body;
 
-    if (!username || !email || !password || !cpf || !birthDate) {
+    if (!fullName || !username || !email || !password || !cpf || !birthDate) {
         return res.status(400).json({ message: 'Preencha todos os campos.' });
     }
 
-    // Verifica se usuário ou email já existem
+    // Verifica se usuário, email OU CPF já existem
     const userExists = await User.findOne({ 
         $or: [
             { username: username }, 
-            { email: email }
+            { email: email },
+            { cpf: cpf }
         ] 
     });
 
     if (userExists) {
+      if (userExists.cpf === cpf) {
+          return res.status(400).json({ message: 'Este CPF já está cadastrado.' });
+      }
       if (userExists.username === username) {
           return res.status(400).json({ message: 'Este nome de usuário já está em uso.' });
       }
@@ -85,11 +90,12 @@ app.post('/api/register', async (req, res) => {
     }
 
     const user = await User.create({
-      username, email, cpf, birthDate, password, balance: 1000
+      fullName, username, email, cpf, birthDate, password, balance: 1000
     });
 
     res.status(201).json({
       id: user._id,
+      fullName: user.fullName,
       username: user.username,
       email: user.email,
       balance: user.balance
@@ -105,12 +111,13 @@ app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    // Permite login por username OU email (opcional, aqui mantive username, mas ajustável)
+    // Permite login por username OU email
     const user = await User.findOne({ username });
 
     if (user && user.password === password) {
       res.json({
         id: user._id,
+        fullName: user.fullName,
         username: user.username,
         email: user.email,
         cpf: user.cpf,

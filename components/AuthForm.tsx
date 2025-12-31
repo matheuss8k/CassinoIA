@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import { User } from '../types';
 import { Button } from './UI/Button';
-import { Play, ShieldCheck, UserPlus, LogIn, Mail } from 'lucide-react';
+import { ShieldCheck, UserPlus, LogIn, Mail, User as UserIcon } from 'lucide-react';
 import { DatabaseService } from '../services/database';
 
 interface AuthFormProps {
   onLogin: (user: User) => void;
 }
 
-// Lista básica de termos proibidos/ofensivos (pode ser expandida via API futuramente)
 const FORBIDDEN_USERNAMES = [
   'admin', 'root', 'suporte', 'moderador', 'system', 'sistema', 
   'merda', 'bosta', 'pinto', 'cu', 'caralho', 'puta', 'viado', 'sexo',
@@ -17,6 +16,9 @@ const FORBIDDEN_USERNAMES = [
 
 export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
   const [isRegister, setIsRegister] = useState(false);
+  
+  // Form State
+  const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [cpf, setCpf] = useState('');
@@ -31,7 +33,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
   const validateCPF = (cpfString: string): boolean => {
     const strCPF = cpfString.replace(/[^\d]+/g, '');
     if (strCPF.length !== 11) return false;
-    if (/^(\d)\1+$/.test(strCPF)) return false; // Elimina sequenciais como 111.111.111-11
+    if (/^(\d)\1+$/.test(strCPF)) return false; 
 
     let sum = 0;
     let remainder;
@@ -51,18 +53,16 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
   };
 
   const validateAge = (dateString: string): boolean => {
-    // Formato esperado DD/MM/AAAA
     const parts = dateString.split('/');
     if (parts.length !== 3) return false;
     
     const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10) - 1; // JS months 0-11
+    const month = parseInt(parts[1], 10) - 1;
     const year = parseInt(parts[2], 10);
 
     const birth = new Date(year, month, day);
     const today = new Date();
     
-    // Valida se a data é real
     if (birth.getFullYear() !== year || birth.getMonth() !== month || birth.getDate() !== day) return false;
 
     let age = today.getFullYear() - birth.getFullYear();
@@ -74,22 +74,21 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
     return age >= 18;
   };
 
+  const validateFullName = (name: string): boolean => {
+      const parts = name.trim().split(' ');
+      return parts.length >= 2 && parts.every(part => part.length >= 2);
+  };
+
   const validateUsername = (name: string): string | null => {
     const cleanName = name.trim();
-    if (cleanName.length < 4) return "O usuário deve ter pelo menos 4 caracteres.";
+    if (cleanName.length < 4) return "Usuário: min. 4 caracteres.";
+    if (!/^[a-zA-Z0-9_]+$/.test(cleanName)) return "Usuário: apenas letras e números.";
+    if (/^(\w)\1+$/.test(cleanName)) return "Usuário inválido (repetitivo).";
     
-    // Regex: Apenas letras, números e underline. Sem espaços ou caracteres especiais.
-    if (!/^[a-zA-Z0-9_]+$/.test(cleanName)) return "Usuário deve conter apenas letras e números.";
-    
-    // Verifica sequências repetitivas simples (ex: aaaaa)
-    if (/^(\w)\1+$/.test(cleanName)) return "Nome de usuário inválido (repetitivo).";
-
-    // Verifica lista negra
     const lowerName = cleanName.toLowerCase();
     if (FORBIDDEN_USERNAMES.some(bad => lowerName.includes(bad))) {
-      return "Este nome de usuário não está disponível ou é impróprio.";
+      return "Nome de usuário impróprio.";
     }
-
     return null;
   };
 
@@ -130,37 +129,34 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
     setError('');
     
     if (!username || !password) {
-      setError('Preencha todos os campos obrigatórios.');
+      setError('Preencha os campos obrigatórios.');
       return;
     }
 
     if (isRegister) {
-       // Validação Username
+       if (!fullName || !validateFullName(fullName)) {
+           setError('Digite seu nome completo.');
+           return;
+       }
+       if (!validateEmail(email)) {
+         setError('Email inválido.');
+         return;
+       }
        const userError = validateUsername(username);
        if (userError) {
          setError(userError);
          return;
        }
-
-       // Validação Email
-       if (!email || !validateEmail(email)) {
-         setError('Por favor, insira um email válido.');
-         return;
-       }
-
-       // Validação CPF
        if (!validateCPF(cpf)) {
-          setError('CPF inválido. Verifique os números digitados.');
+          setError('CPF inválido.');
           return;
        }
-
-       // Validação Data/Idade
        if (birthDate.length < 10) {
-         setError('Data de nascimento incompleta.');
+         setError('Data incompleta.');
          return;
        }
        if (!validateAge(birthDate)) {
-         setError('É necessário ter mais de 18 anos para se cadastrar.');
+         setError('Apenas para maiores de 18 anos.');
          return;
        }
     }
@@ -170,6 +166,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
     try {
       if (isRegister) {
         const newUser = await DatabaseService.createUser({
+          fullName,
           username,
           email,
           cpf,
@@ -190,120 +187,153 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 relative z-10">
-      <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl relative overflow-hidden">
+      <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
         
         {/* Decorative background glow */}
         <div className="absolute -top-20 -right-20 w-64 h-64 bg-casino-purple/40 rounded-full blur-3xl"></div>
         <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-casino-gold/20 rounded-full blur-3xl"></div>
 
         <div className="relative z-10">
-          <div className="text-center mb-6">
-            <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">CASSINO IA</h1>
-            <p className="text-casino-gold uppercase tracking-widest text-xs font-semibold">Experiência Premium de Cassino</p>
+          <div className="text-center mb-4">
+            <h1 className="text-3xl font-extrabold text-white mb-1 tracking-tight">CASSINO IA</h1>
+            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">Experiência Premium</p>
           </div>
 
-          {/* Tabs */}
-          <div className="flex p-1 bg-slate-950/50 rounded-lg mb-6">
+          {/* Compact Tabs */}
+          <div className="flex p-1 bg-slate-950/50 rounded-lg mb-4">
              <button 
-               className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${!isRegister ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+               className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${!isRegister ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
                onClick={() => { setIsRegister(false); setError(''); }}
              >
                ENTRAR
              </button>
              <button 
-               className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${isRegister ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+               className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${isRegister ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}
                onClick={() => { setIsRegister(true); setError(''); }}
              >
                CRIAR CONTA
              </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-slate-400 text-xs font-bold uppercase mb-1 ml-1">Usuário</label>
-              <input 
-                type="text" 
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-xl px-4 py-3 outline-none transition-colors"
-                placeholder="Seu nome de usuário"
-              />
-            </div>
+          <form onSubmit={handleSubmit} className="space-y-3">
             
+            {/* Login Fields */}
+            {!isRegister && (
+               <div className="space-y-3">
+                   <div>
+                    <label className="block text-slate-400 text-[10px] font-bold uppercase mb-1 ml-1">Usuário</label>
+                    <input 
+                        type="text" 
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                        placeholder="Nome de usuário"
+                    />
+                    </div>
+                    <div>
+                    <label className="block text-slate-400 text-[10px] font-bold uppercase mb-1 ml-1">Senha</label>
+                    <input 
+                        type="password" 
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                        placeholder="••••••••"
+                    />
+                    </div>
+               </div>
+            )}
+
+            {/* Registration Fields - Compact Grid Layout */}
             {isRegister && (
-            <div className="animate-slide-up space-y-4">
+            <div className="animate-slide-up space-y-2">
+              
+              {/* Nome Completo */}
               <div>
-                <label className="block text-slate-400 text-xs font-bold uppercase mb-1 ml-1">Email</label>
-                <div className="relative">
-                  <input 
-                    type="email" 
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-xl px-4 py-3 outline-none transition-colors"
-                    placeholder="seu@email.com"
-                  />
-                  <Mail className="absolute right-4 top-3.5 text-slate-600" size={16} />
-                </div>
+                <input 
+                    type="text" 
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                    placeholder="Nome Completo"
+                />
               </div>
 
-              <div>
-                <label className="block text-slate-400 text-xs font-bold uppercase mb-1 ml-1">CPF</label>
-                <input 
-                  type="text" 
-                  value={cpf}
-                  onChange={handleCpfChange}
-                  className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-xl px-4 py-3 outline-none transition-colors"
-                  placeholder="000.000.000-00"
-                  maxLength={14}
-                />
+               {/* Email & Usuário - Side by Side */}
+               <div className="grid grid-cols-2 gap-2">
+                    <div className="relative">
+                        <input 
+                            type="email" 
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                            placeholder="Email"
+                        />
+                    </div>
+                     <div>
+                        <input 
+                            type="text" 
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                            placeholder="Usuário (Login)"
+                        />
+                    </div>
+               </div>
+
+              {/* CPF & Birth Date - Side by Side */}
+              <div className="grid grid-cols-2 gap-2">
+                  <input 
+                    type="text" 
+                    value={cpf}
+                    onChange={handleCpfChange}
+                    className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                    placeholder="CPF"
+                    maxLength={14}
+                  />
+                  <input 
+                    type="text" 
+                    value={birthDate}
+                    onChange={handleDateChange}
+                    className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                    placeholder="Nascimento"
+                    maxLength={10}
+                  />
               </div>
-              <div>
-                <label className="block text-slate-400 text-xs font-bold uppercase mb-1 ml-1">Data de Nascimento</label>
+
+               <div>
                 <input 
-                  type="text" 
-                  value={birthDate}
-                  onChange={handleDateChange}
-                  className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-xl px-4 py-3 outline-none transition-colors"
-                  placeholder="DD/MM/AAAA"
-                  maxLength={10}
+                    type="password" 
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                    placeholder="Senha"
                 />
-              </div>
+               </div>
             </div>
             )}
 
-            <div>
-              <label className="block text-slate-400 text-xs font-bold uppercase mb-1 ml-1">Senha</label>
-              <input 
-                type="password" 
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-950/50 border border-slate-700 focus:border-casino-gold text-white rounded-xl px-4 py-3 outline-none transition-colors"
-                placeholder="••••••••"
-              />
-            </div>
-
             {error && (
-              <div className="text-red-400 text-sm text-center bg-red-900/20 py-2 rounded-lg border border-red-900/50 animate-shake">
+              <div className="text-red-400 text-xs text-center bg-red-900/20 py-1.5 rounded-lg border border-red-900/50 animate-shake">
                 {error}
               </div>
             )}
 
             <div className="pt-2">
-              <Button fullWidth size="lg" disabled={isLoading} type="submit" variant={isRegister ? 'primary' : 'success'}>
+              <Button fullWidth size="md" disabled={isLoading} type="submit" variant={isRegister ? 'primary' : 'success'}>
                  {isLoading ? (
-                    <span className="animate-pulse">PROCESSANDO...</span>
+                    <span className="animate-pulse">...</span>
                  ) : (
                     <>
                       {isRegister ? 'CRIAR CONTA' : 'ACESSAR'} 
-                      {isRegister ? <UserPlus size={18} /> : <LogIn size={18} />}
+                      {isRegister ? <UserPlus size={16} /> : <LogIn size={16} />}
                     </>
                  )}
               </Button>
             </div>
           </form>
           
-          <div className="mt-6 flex justify-center text-slate-500 text-xs gap-2 items-center">
-            <ShieldCheck size={14} /> 
+          <div className="mt-4 flex justify-center text-slate-500 text-[10px] gap-2 items-center">
+            <ShieldCheck size={12} /> 
             <span>Ambiente seguro e criptografado</span>
           </div>
         </div>
