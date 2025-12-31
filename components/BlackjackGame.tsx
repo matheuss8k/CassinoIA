@@ -350,15 +350,15 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateBalanc
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
       
-      {/* Title - Increased PT to 8 to keep it low, PB to 4 for spacing */}
-      <div className="flex-none pt-8 pb-4 text-center relative z-20">
-          <h1 className="text-2xl md:text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]">
+      {/* Title - Reduced spacing to move things up (pt-2) */}
+      <div className="flex-none pt-2 pb-2 text-center relative z-20">
+          <h1 className="text-2xl md:text-3xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]">
               BLACKJACK <span className="text-casino-gold">IA</span>
           </h1>
       </div>
 
-      {/* Main Container - Changed to simple p-4 to allow natural centering of table */}
-      <div className="flex-1 w-full max-w-[1600px] flex items-center justify-center gap-4 xl:gap-8 relative p-4 min-h-0">
+      {/* Main Container - Reduced gap */}
+      <div className="flex-1 w-full max-w-[1600px] flex items-center justify-center gap-2 xl:gap-8 relative p-2 md:p-4 min-h-0">
         
         {/* Left Sidebar (Rules) - Relative in Flex on XL, Absolute on small */}
         <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0">

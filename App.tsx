@@ -46,70 +46,75 @@ const App: React.FC = () => {
     await DatabaseService.updateBalance(user.id, newBalance);
   };
 
-  // Background style
-  const bgStyle = {
-    backgroundImage: `
-      radial-gradient(circle at 15% 50%, rgba(88, 28, 135, 0.15) 0%, transparent 25%),
-      radial-gradient(circle at 85% 30%, rgba(251, 191, 36, 0.1) 0%, transparent 25%)
-    `
-  };
-
   return (
-    <div className="min-h-screen w-full bg-slate-950 text-white font-sans overflow-hidden flex flex-col" style={bgStyle}>
+    <div className="h-screen w-screen bg-slate-950 text-white font-sans overflow-hidden flex flex-col relative">
+      
+      {/* GLOBAL BACKGROUND LAYER - Ajustado para ser MUITO sutil e ficar ao fundo */}
+      <div 
+        className="fixed inset-0 pointer-events-none z-0" 
+        style={{
+          background: `
+            radial-gradient(circle at 0% 50%, rgba(88, 28, 135, 0.08) 0%, transparent 40%),
+            radial-gradient(circle at 100% 0%, rgba(251, 191, 36, 0.02) 0%, transparent 30%) 
+          `
+          /* Gold reduzido para 0.02 (2%) e movido para o canto superior direito (100% 0%) */
+        }}
+      />
+
       {/* Navbar (Only if logged in) */}
       {user && (
-        <nav className="h-16 border-b border-white/10 bg-slate-900/80 backdrop-blur-md px-4 flex items-center justify-between sticky top-0 z-40">
+        <nav className="h-14 flex-none border-b border-white/5 bg-slate-900/90 backdrop-blur-md px-4 flex items-center justify-between relative z-50">
            <div className="flex items-center gap-4">
              {currentView !== 'dashboard' && (
                 <button 
                   onClick={() => setCurrentView('dashboard')}
-                  className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 transition-colors"
+                  className="bg-slate-800 p-1.5 rounded-full hover:bg-slate-700 transition-colors"
                   title="Voltar ao Lobby"
                 >
-                    <ChevronLeft size={20} />
+                    <ChevronLeft size={18} />
                 </button>
              )}
              
              <div className="flex items-center gap-2">
-               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-casino-gold to-yellow-600 flex items-center justify-center font-bold text-black shadow-lg shadow-yellow-500/20">
+               <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-casino-gold to-yellow-600 flex items-center justify-center font-bold text-black shadow-lg shadow-yellow-500/20 text-xs">
                  IA
                </div>
-               <span className="font-bold hidden sm:block">CASSINO IA</span>
+               <span className="font-bold hidden sm:block text-sm tracking-wider">CASINO AI</span>
              </div>
            </div>
 
-           <div className="flex items-center gap-4">
+           <div className="flex items-center gap-3">
              <button 
                 onClick={() => setIsWalletOpen(true)}
-                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-4 py-1.5 rounded-full border border-casino-gold/30 transition-all group"
+                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded-full border border-casino-gold/20 transition-all group"
              >
-                <div className="bg-casino-green w-2 h-2 rounded-full animate-pulse"></div>
-                <span className="font-mono font-bold text-casino-gold group-hover:text-white transition-colors">
+                <div className="bg-casino-green w-1.5 h-1.5 rounded-full animate-pulse"></div>
+                <span className="font-mono font-bold text-casino-gold group-hover:text-white transition-colors text-sm">
                   R$ {user.balance.toFixed(2)}
                 </span>
-                <Wallet size={16} className="text-slate-400 group-hover:text-white" />
+                <Wallet size={14} className="text-slate-400 group-hover:text-white" />
              </button>
 
              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-slate-300">
-                    <UserIcon size={16} />
+                <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center text-slate-300">
+                    <UserIcon size={14} />
                 </div>
                 <span className="text-sm font-medium hidden sm:block text-slate-300">{user.username}</span>
              </div>
              
              <button 
                onClick={handleLogout}
-               className="p-2 text-slate-500 hover:text-red-400 transition-colors"
+               className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
                title="Sair"
              >
-               <LogOut size={20} />
+               <LogOut size={18} />
              </button>
            </div>
         </nav>
       )}
 
-      {/* Main Content */}
-      <main className="flex-grow relative flex flex-col">
+      {/* Main Content - Z-10 garante que o conteúdo fique sobre o background */}
+      <main className="flex-1 relative w-full overflow-hidden flex flex-col z-10">
         {!user ? (
           <AuthForm onLogin={handleLogin} />
         ) : (
@@ -131,9 +136,9 @@ const App: React.FC = () => {
       )}
       
       {/* Footer */}
-      <footer className="text-center py-2 text-slate-600 text-xs">
-        &copy; 2024 Cassino IA. Jogue com responsabilidade.
-      </footer>
+      <div className="absolute bottom-1 right-2 text-slate-700 text-[9px] pointer-events-none z-10 opacity-30">
+         v1.0.1
+      </div>
     </div>
   );
 };

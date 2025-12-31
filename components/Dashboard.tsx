@@ -129,7 +129,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
   );
 
   return (
-    <div className="w-full h-full overflow-y-auto no-scrollbar px-4 py-8 animate-slide-up">
+    <div className="w-full h-full overflow-y-auto no-scrollbar px-4 py-4 animate-slide-up">
       <div className="max-w-6xl mx-auto pb-20">
         
         {/* Section 1: Casino Classics */}
