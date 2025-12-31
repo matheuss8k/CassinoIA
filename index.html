@@ -6,20 +6,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Cassino AI - Premium Experience</title>
     
-    <!-- Scripts de Estilo e Ícones -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     
-    <!-- Transpiler para ler .tsx direto no navegador (Opcional se usar Vite, mas seguro para arquivos avulsos) -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind Config -->
     <script>
       tailwind.config = {
         theme: {
           extend: {
-            fontFamily: { sans: ['Outfit', 'sans-serif'] },
+            fontFamily: {
+              sans: ['Outfit', 'sans-serif'],
+            },
             colors: {
               casino: {
                 dark: '#0f172a',
@@ -41,51 +43,83 @@
               'fall': 'fall 3s linear infinite',
             },
             keyframes: {
-              deal: { '0%': { transform: 'translateY(-200px) scale(0.5)', opacity: '0' }, '100%': { transform: 'translateY(0) scale(1)', opacity: '1' } },
-              pulseGold: { '0%, 100%': { boxShadow: '0 0 10px #fbbf24' }, '50%': { boxShadow: '0 0 25px #fbbf24' } },
-              shine: { '0%': { left: '-100%' }, '100%': { left: '200%' } },
-              slideUp: { '0%': { transform: 'translateY(20px)', opacity: '0' }, '100%': { transform: 'translateY(0)', opacity: '1' } },
-              fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
-              fall: { '0%': { transform: 'translateY(-10vh) rotate(0deg)', opacity: '1' }, '100%': { transform: 'translateY(120vh) rotate(720deg)', opacity: '0' } }
+              deal: {
+                '0%': { transform: 'translateY(-200px) scale(0.5)', opacity: '0' },
+                '100%': { transform: 'translateY(0) scale(1)', opacity: '1' },
+              },
+              pulseGold: {
+                '0%, 100%': { boxShadow: '0 0 10px #fbbf24' },
+                '50%': { boxShadow: '0 0 25px #fbbf24' },
+              },
+              shine: {
+                '0%': { left: '-100%' },
+                '100%': { left: '200%' }
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(20px)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' }
+              },
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' }
+              },
+              fall: {
+                '0%': { transform: 'translateY(-10vh) rotate(0deg)', opacity: '1' },
+                '100%': { transform: 'translateY(120vh) rotate(720deg)', opacity: '0' }
+              }
             }
           }
         }
       }
     </script>
-
+    
+    <!-- Global Styles -->
     <style>
       body {
         background-color: #020617;
         color: white;
-        overflow: hidden;
-        touch-action: none;
+        overflow: hidden; /* No Global Scroll */
+        touch-action: none; /* Prevent bounce on mobile */
         -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
-      .perspective-1000 { perspective: 1000px; }
-      .preserve-3d { transform-style: preserve-3d; }
-      .backface-hidden { backface-visibility: hidden; }
-      .rotate-y-180 { transform: rotateY(180deg); }
-      .no-scrollbar::-webkit-scrollbar { display: none; }
-      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      .perspective-1000 {
+        perspective: 1000px;
+      }
+      .preserve-3d {
+        transform-style: preserve-3d;
+      }
+      .backface-hidden {
+        backface-visibility: hidden;
+      }
+      .rotate-y-180 {
+        transform: rotateY(180deg);
+      }
+      
+      /* Hide Scrollbar */
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
     </style>
-
-    <!-- O IMPORTMAP É ESSENCIAL PARA O REACT FUNCIONAR -->
-    <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0",
-        "react-dom": "https://esm.sh/react-dom@18.2.0",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.344.0"
-      }
-    }
-    </script>
-  </head>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
+  }
+}
+</script>
+</head>
   <body>
     <div id="root"></div>
-    
-    <!-- Se o seu arquivo for .tsx e você estiver rodando sem um servidor de build (Vite), 
-         o type deve ser "text/babel" ou você deve usar um servidor como o Vite localmente -->
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>
