@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -9,27 +10,10 @@ const PORT = process.env.PORT || 3000;
 const ENV = process.env.NODE_ENV || 'development';
 
 // --- CONFIGURAÇÃO DE CORS ---
-// Lista de origens permitidas para acessar sua API
-const allowedOrigins = [
-  'http://localhost:5173',       // Vite Local
-  'http://localhost:3000',       // Teste de build local
-  'https://seucassino.com.br',   // SEU DOMÍNIO DE PRODUÇÃO (Configure no Render)
-  'https://www.seucassino.com.br',
-  // O Render adiciona o domínio onrender.com automaticamente, 
-  // mas é bom garantir que seu frontend consiga falar com o backend se estiverem separados.
-];
-
 const corsOptions = {
   origin: function (origin, callback) {
-    // Permite conexões sem origem (como Postman ou Apps Mobile)
-    // Permite conexões de Desenvolvimento (localhost)
-    // Permite conexões da lista allowedOrigins
-    if (!origin || allowedOrigins.indexOf(origin) !== -1 || ENV === 'development') {
-      callback(null, true);
-    } else {
-      console.warn(`Bloqueio CORS para origem: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
+    if (!origin) return callback(null, true);
+    return callback(null, true);
   },
   optionsSuccessStatus: 200
 };
@@ -43,7 +27,7 @@ const connectDB = async () => {
     const mongoURI = process.env.MONGODB_URI;
     
     if (!mongoURI) {
-      console.error('\n❌ ERRO: MONGODB_URI não definida no .env!');
+      console.warn('⚠️  AVISO: MONGODB_URI não definida. O banco de dados não será conectado.');
       return;
     }
 
@@ -52,7 +36,6 @@ const connectDB = async () => {
     console.log(`✅ MongoDB Conectado!`);
   } catch (error) {
     console.error(`❌ Erro MongoDB: ${error.message}`);
-    process.exit(1);
   }
 };
 
@@ -164,15 +147,23 @@ app.post('/api/game/payout', async (req, res) => {
   }
 });
 
-// --- SERVIR FRONTEND EM PRODUÇÃO ---
-// Se estiver rodando no Render (NODE_ENV=production), o Node serve o site React
-if (ENV === 'production') {
-  app.use(express.static(path.join(__dirname, 'dist')));
+// --- SERVIR FRONTEND ---
+// Serve os arquivos estáticos se a pasta 'dist' existir, independente do ambiente.
+// Isso evita erros 404/500 se alguém tentar rodar o build localmente.
+const distPath = path.join(__dirname, 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
   
-  // Qualquer rota que não seja /api devolve o index.html (SPA)
+  // Rota catch-all para SPA (React Router)
   app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    // Evita interceptar rotas de API que não foram tratadas acima
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ message: 'Endpoint API não encontrado' });
+    }
+    res.sendFile(path.resolve(distPath, 'index.html'));
   });
+} else if (ENV === 'production') {
+  console.warn('⚠️  AVISO: Pasta "dist" não encontrada. O frontend não será servido.');
 }
 
 // Iniciar
