@@ -32,8 +32,13 @@ const connectDB = async () => {
     }
 
     console.log(`🔄 [${ENV.toUpperCase()}] Conectando ao MongoDB...`);
-    await mongoose.connect(mongoURI);
-    console.log(`✅ MongoDB Conectado!`);
+    
+    // Configuração explícita do nome do banco de dados para evitar o uso de 'test'
+    await mongoose.connect(mongoURI, {
+      dbName: 'casino_ai_db' 
+    });
+    
+    console.log(`✅ MongoDB Conectado ao banco: casino_ai_db`);
   } catch (error) {
     console.error(`❌ Erro MongoDB: ${error.message}`);
   }
@@ -42,7 +47,7 @@ const connectDB = async () => {
 // Define User Schema
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
-  email: { type: String, required: true, unique: true }, // Novo campo
+  email: { type: String, required: true, unique: true },
   cpf: { type: String, required: true },
   birthDate: { type: String, required: true },
   password: { type: String, required: true },
