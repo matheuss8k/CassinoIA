@@ -9,6 +9,8 @@ interface AuthFormProps {
   onLogin: (user: User) => void;
 }
 
+const APP_VERSION = 'v1.4.0';
+
 const FORBIDDEN_USERNAMES = [
   'admin', 'root', 'suporte', 'moderador', 'system', 'sistema', 
   'merda', 'bosta', 'pinto', 'cu', 'caralho', 'puta', 'viado', 'sexo',
@@ -334,6 +336,11 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
             <span>Ambiente seguro e criptografado</span>
           </div>
         </div>
+      </div>
+      
+      {/* Version Indicator */}
+      <div className="mt-8 text-[10px] text-slate-600 font-mono tracking-widest opacity-40 select-none">
+          {APP_VERSION}
       </div>
     </div>
   );

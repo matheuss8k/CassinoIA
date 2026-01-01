@@ -1,4 +1,3 @@
-
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -35,16 +34,25 @@ const createRateLimiter = ({ windowMs, max, message }) => {
     };
 };
 
-const limiter = createRateLimiter({ windowMs: 60000, max: 3000, message: { message: 'Slow down.' } });
+const limiter = createRateLimiter({ windowMs: 60000, max: 5000, message: { message: 'Muitas requisições. Aguarde um momento.' } });
 app.set('trust proxy', 1);
 app.use(limiter);
 
+// --- CORS & DEBUGGING ---
+// Permite qualquer origem para resolver problemas de acesso via IP na rede local
 app.use(cors({
-  origin: (origin, callback) => callback(null, true),
+  origin: '*', 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
 app.use(express.json());
+
+// Log básico para debug de conexões externas
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - IP: ${req.ip}`);
+    next();
+});
 
 // --- MONGODB ---
 const connectDB = async () => {
@@ -89,27 +97,45 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   cpf: { type: String, required: true, unique: true },
   birthDate: { type: String, required: true },
-  password: { type: String, required: true },
+  password: { type: String, required: true }, // Em produção real, deve ser hash (bcrypt)
   balance: { type: Number, default: 1000 },
   consecutiveWins: { type: Number, default: 0 },
   avatarId: { type: String, default: '1' },
+  activeFrame: { type: String, default: null },
   isVerified: { type: Boolean, default: false },
   documentsStatus: { type: String, default: 'NONE' },
   vipLevel: { type: Number, default: 0 },
   
-  // Gamification Core (Simplified)
+  // Gamification Core
   loyaltyPoints: { type: Number, default: 0 },
   
   missions: [missionSchema],
-  unlockedTrophies: [String],
+  unlockedTrophies: { type: [String], default: [] },
   ownedItems: { type: [String], default: [] }, 
   lastDailyReset: { type: String, default: '' },
   totalGamesPlayed: { type: Number, default: 0 },
   totalBlackjacks: { type: Number, default: 0 },
   activeGame: { type: activeGameSchema, default: () => ({}) }
-}, { timestamps: true });
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
 
 const User = mongoose.model('User', userSchema);
+
+// --- HELPER: SANITIZE USER ---
+const sanitizeUser = (user) => {
+    const userObj = user.toObject ? user.toObject() : user;
+    delete userObj.password; 
+    delete userObj._id; 
+    
+    if (userObj.activeGame) {
+        if (userObj.activeGame.bjDeck) delete userObj.activeGame.bjDeck;
+        if (userObj.activeGame.minesList) delete userObj.activeGame.minesList;
+    }
+    return userObj;
+};
 
 // --- CORE GAMIFICATION LOGIC ---
 
@@ -128,13 +154,47 @@ const updateMissions = (user, type, amount) => {
             if (mission.current >= mission.target) {
                 mission.current = mission.target;
                 mission.completed = true;
-                // Add Mission Rewards
                 applyGameRewards(user, mission.rewardPoints);
             }
             missionChanged = true;
         }
     });
     if (missionChanged) user.markModified('missions');
+};
+
+const checkTrophies = (user, context) => {
+    const { bet, winAmount, gameType, outcome, extraData } = context;
+    let trophiesChanged = false;
+
+    const unlock = (id) => {
+        if (!user.unlockedTrophies.includes(id)) {
+            user.unlockedTrophies.push(id);
+            trophiesChanged = true;
+        }
+    };
+
+    // 1. First Win (Qualquer vitória > 0)
+    if (winAmount > 0) unlock('first_win');
+
+    // 2. High Roller (Aposta >= 500)
+    if (bet >= 500) unlock('high_roller');
+
+    // 3. Sniper (Mines: 20 acertos)
+    if (gameType === 'MINES' && extraData?.revealedCount >= 20) unlock('sniper');
+
+    // 4. Club 50 (50 Jogos)
+    if (user.totalGamesPlayed >= 50) unlock('club_50');
+
+    // 5. BJ Master (10 Blackjacks Naturais)
+    if (gameType === 'BLACKJACK' && outcome === 'BLACKJACK') {
+        user.totalBlackjacks = (user.totalBlackjacks || 0) + 1;
+        if (user.totalBlackjacks >= 10) unlock('bj_master');
+    }
+
+    // 6. Rich Club (Saldo >= 5000)
+    if (user.balance >= 5000) unlock('rich_club');
+
+    if (trophiesChanged) user.markModified('unlockedTrophies');
 };
 
 const generateDailyMissions = () => {
@@ -155,41 +215,31 @@ app.post('/api/login', async (req, res) => {
     let user = await User.findOne({ $or: [{ username }, { email: username }] });
     
     if (user && user.password === password) {
+        // --- DATA INTEGRITY GUARD ---
+        user.balance = Math.floor(Number(user.balance) || 1000);
+        user.loyaltyPoints = Math.floor(Number(user.loyaltyPoints) || 0);
+        user.vipLevel = Math.floor(Number(user.vipLevel) || 0);
+        if (!user.missions) user.missions = [];
+        if (!user.ownedItems) user.ownedItems = [];
+        if (!user.unlockedTrophies) user.unlockedTrophies = [];
+        if (!user.activeGame) user.activeGame = { type: 'NONE' };
+
         const today = new Date().toISOString().split('T')[0];
-        
-        // Reset Diário
         if (user.lastDailyReset !== today) {
             user.missions = generateDailyMissions();
             user.lastDailyReset = today;
             user.markModified('missions');
         }
-
-        user.balance = Math.floor(user.balance);
+        
         if (user.activeGame?.minesGameOver) user.activeGame = { type: 'NONE' };
 
         await user.save();
-
-        res.json({ 
-            id: user._id, 
-            fullName: user.fullName, 
-            username: user.username, 
-            email: user.email, 
-            balance: user.balance, 
-            loyaltyPoints: user.loyaltyPoints,
-            missions: user.missions,
-            avatarId: user.avatarId,
-            isVerified: user.isVerified,
-            activeGame: user.activeGame,
-            ownedItems: user.ownedItems,
-            cpf: user.cpf,
-            birthDate: user.birthDate,
-            documentsStatus: user.documentsStatus,
-            vipLevel: user.vipLevel || 0
-        });
+        res.json(sanitizeUser(user));
     } else {
       res.status(401).json({ message: 'Credenciais inválidas.' });
     }
   } catch (error) {
+    console.error("LOGIN ERROR:", error);
     res.status(500).json({ message: 'Erro no servidor.' });
   }
 });
@@ -197,24 +247,42 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/user/sync', async (req, res) => {
     try {
         const { userId } = req.body;
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ message: 'ID de usuário inválido.'});
+        }
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
-        
-        await user.save();
 
-        res.json({
-            balance: user.balance,
-            loyaltyPoints: user.loyaltyPoints,
-            missions: user.missions
-        });
-    } catch (e) { res.status(500).json({ message: 'Sync error' }); }
+        user.balance = Math.floor(Number(user.balance) || 1000);
+        user.loyaltyPoints = Math.floor(Number(user.loyaltyPoints) || 0);
+        user.vipLevel = Math.floor(Number(user.vipLevel) || 0);
+        if (!user.missions) user.missions = [];
+        if (!user.ownedItems) user.ownedItems = [];
+        if (!user.unlockedTrophies) user.unlockedTrophies = [];
+        if (!user.activeGame) user.activeGame = { type: 'NONE' };
+        
+        const today = new Date().toISOString().split('T')[0];
+        if (user.lastDailyReset !== today) {
+            user.missions = generateDailyMissions();
+            user.lastDailyReset = today;
+            user.markModified('missions');
+        }
+
+        if (user.activeGame?.minesGameOver) user.activeGame = { type: 'NONE' };
+
+        await user.save();
+        res.json(sanitizeUser(user));
+    } catch (e) { 
+        console.error("SYNC ERROR:", e);
+        res.status(500).json({ message: 'Sync error' }); 
+    }
 });
 
 app.post('/api/register', async (req, res) => {
   try {
     const { fullName, username, email, cpf, birthDate, password } = req.body;
     const existing = await User.findOne({ $or: [{ username }, { email }, { cpf }] });
-    if (existing) return res.status(400).json({ message: 'Dados já cadastrados.' });
+    if (existing) return res.status(400).json({ message: 'Dados já cadastrados (Usuário, Email ou CPF).' });
 
     const user = await User.create({ 
         fullName, username, email, cpf, birthDate, password, 
@@ -222,21 +290,40 @@ app.post('/api/register', async (req, res) => {
         missions: generateDailyMissions(),
         lastDailyReset: new Date().toISOString().split('T')[0],
         loyaltyPoints: 0,
-        vipLevel: 0
+        vipLevel: 0,
+        activeFrame: null,
+        activeGame: { type: 'NONE' }
     });
 
-    res.status(201).json({ 
-        id: user._id, 
-        fullName: user.fullName, 
-        username: user.username, 
-        balance: user.balance,
-        missions: user.missions,
-        activeGame: { type: 'NONE' },
-        avatarId: '1',
-        isVerified: false,
-        vipLevel: 0
-    });
-  } catch (error) { res.status(500).json({ message: 'Erro ao criar conta.' }); }
+    res.status(201).json(sanitizeUser(user));
+  } catch (error) { 
+      console.error(error);
+      res.status(500).json({ message: 'Erro ao criar conta.' }); 
+  }
+});
+
+app.post('/api/user/avatar', async (req, res) => {
+    try {
+        const { userId, avatarId } = req.body;
+        await User.findByIdAndUpdate(userId, { avatarId });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: 'Erro' }); }
+});
+
+app.post('/api/user/frame', async (req, res) => {
+    try {
+        const { userId, frameId } = req.body;
+        await User.findByIdAndUpdate(userId, { activeFrame: frameId });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: 'Erro' }); }
+});
+
+app.post('/api/user/verify', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        await User.findByIdAndUpdate(userId, { documentsStatus: 'PENDING' });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: 'Erro' }); }
 });
 
 // --- BLACKJACK ENDPOINTS ---
@@ -245,19 +332,21 @@ app.post('/api/blackjack/deal', async (req, res) => {
     const { userId, amount } = req.body;
     const bet = Math.floor(Number(amount));
     
+    if (isNaN(bet) || bet <= 0) return res.status(400).json({ message: 'Aposta inválida' });
+    
     const user = await User.findById(userId);
-    if (!user || user.balance < bet) return res.status(400).json({ message: 'Erro' });
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+    if (user.balance < bet) return res.status(400).json({ message: 'Saldo insuficiente' });
 
     user.balance = Math.floor(user.balance - bet);
     user.totalGamesPlayed = (user.totalGamesPlayed || 0) + 1;
 
-    // Deck Logic
     const SUITS = ['♥', '♦', '♣', '♠'];
     const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
     const createDeck = () => {
         let d = []; for(let i=0; i<6; i++) for(let s of SUITS) for(let r of RANKS) {
             let v = parseInt(r); if(['J','Q','K'].includes(r)) v=10; if(r==='A') v=11;
-            d.push({rank:r, suit:s, value:v, id:Math.random().toString(36)});
+            d.push({rank:r, suit:s, value:v, id:Math.random().toString(36).substr(2,9)});
         } return d.sort(() => Math.random() - 0.5);
     };
     const calc = (h) => { let s=0,a=0; h.forEach(c=>{if(!c.isHidden){s+=c.value; if(c.rank==='A')a++;}}); while(s>21&&a>0){s-=10;a--;} return s; };
@@ -270,26 +359,29 @@ app.post('/api/blackjack/deal', async (req, res) => {
     let pScore = calc(pHand);
     let dScore = calc(dHand); 
 
-    if (pScore === 21 && dScore !== 21) { 
-        status = 'GAME_OVER'; result = 'BLACKJACK'; 
-        user.balance += Math.floor(bet * 2.5); 
-    } else if (pScore === 21 && dScore === 21) {
-        status = 'GAME_OVER'; result = 'PUSH'; user.balance += bet;
-    } else if (dScore === 21) {
-        status = 'GAME_OVER'; result = 'LOSE';
+    if (pScore === 21) { 
+        status = 'GAME_OVER';
+        if (dScore === 21) {
+            result = 'PUSH'; user.balance += bet;
+        } else {
+            result = 'BLACKJACK'; user.balance += Math.floor(bet * 2.5); 
+        }
     }
 
     user.activeGame = (status === 'PLAYING') ? { type: 'BLACKJACK', bet, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: status } : { type: 'NONE' };
 
-    // Gamification Hook
-    applyGameRewards(user, bet); // 1 Point per 1 Real
+    applyGameRewards(user, bet);
     updateMissions(user, 'bet_total', bet);
 
-    if (result === 'BLACKJACK' || result === 'WIN') {
-        user.consecutiveWins++;
+    // -- TROPHY CHECK (Initial Deal) --
+    if (result === 'BLACKJACK') {
+        user.consecutiveWins = (user.consecutiveWins || 0) + 1;
         applyGameRewards(user, Math.floor(bet * 0.2));
         updateMissions(user, 'blackjack_win', 1);
-    } else if (result === 'LOSE') user.consecutiveWins = 0;
+        checkTrophies(user, { bet, winAmount: Math.floor(bet * 2.5), gameType: 'BLACKJACK', outcome: 'BLACKJACK' });
+    } else {
+        checkTrophies(user, { bet, winAmount: 0, gameType: 'BLACKJACK', outcome: 'NONE' });
+    }
 
     await user.save();
     
@@ -304,13 +396,15 @@ app.post('/api/blackjack/deal', async (req, res) => {
 app.post('/api/blackjack/hit', async (req, res) => {
     const { userId } = req.body;
     const user = await User.findById(userId);
-    if (!user || user.activeGame.type !== 'BLACKJACK') return res.status(400).json({ message: 'Erro' });
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+    if (user.activeGame.type !== 'BLACKJACK') return res.status(400).json({ message: 'Nenhum jogo ativo' });
 
     const game = user.activeGame;
-    const card = game.bjDeck.pop();
-    game.bjPlayerHand.push(card);
+    if (!game.bjDeck || game.bjDeck.length === 0) return res.status(500).json({ message: 'Erro no baralho' });
+
+    game.bjPlayerHand.push(game.bjDeck.pop());
     
-    const calc = (h) => { let s=0,a=0; h.forEach(c=>{if(!c.isHidden){s+=c.value; if(c.rank==='A')a++;}}); while(s>21&&a>0){s-=10;a--;} return s; };
+    const calc = (h) => { let s=0,a=0; h.forEach(c=>{s+=c.value; if(c.rank==='A')a++;}); while(s>21&&a>0){s-=10;a--;} return s; };
     
     let score = calc(game.bjPlayerHand);
     let status = 'PLAYING';
@@ -333,13 +427,15 @@ app.post('/api/blackjack/hit', async (req, res) => {
 app.post('/api/blackjack/stand', async (req, res) => {
     const { userId } = req.body;
     const user = await User.findById(userId);
-    if (!user || user.activeGame.type !== 'BLACKJACK') return res.status(400).json({ message: 'Erro' });
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+    if (user.activeGame.type !== 'BLACKJACK') return res.status(400).json({ message: 'Nenhum jogo ativo' });
 
     const game = user.activeGame;
-    const calc = (h) => { let s=0,a=0; h.forEach(c=>{if(!c.isHidden){s+=c.value; if(c.rank==='A')a++;}}); while(s>21&&a>0){s-=10;a--;} return s; };
+    const calc = (h) => { let s=0,a=0; h.forEach(c=>{s+=c.value; if(c.rank==='A')a++;}); while(s>21&&a>0){s-=10;a--;} return s; };
     
     let dScore = calc(game.bjDealerHand);
     while (dScore < 17) {
+        if (!game.bjDeck.length) break;
         game.bjDealerHand.push(game.bjDeck.pop());
         dScore = calc(game.bjDealerHand);
     }
@@ -361,9 +457,12 @@ app.post('/api/blackjack/stand', async (req, res) => {
     }
 
     if (result === 'WIN') {
-        user.consecutiveWins++;
+        user.consecutiveWins = (user.consecutiveWins || 0) + 1;
         updateMissions(user, 'blackjack_win', 1);
     } else user.consecutiveWins = 0;
+
+    // -- TROPHY CHECK (Stand/End) --
+    checkTrophies(user, { bet: game.bet, winAmount: payout - game.bet, gameType: 'BLACKJACK', outcome: result });
 
     game.type = 'NONE';
     user.markModified('activeGame');
@@ -380,23 +479,31 @@ app.post('/api/blackjack/stand', async (req, res) => {
 app.post('/api/mines/start', async (req, res) => {
     const { userId, amount, minesCount } = req.body;
     const bet = Math.floor(Number(amount));
+    const mines = Number(minesCount);
+
+    if (isNaN(bet) || bet <= 0) return res.status(400).json({ message: 'Aposta inválida' });
+    if (isNaN(mines) || mines < 1 || mines > 24) return res.status(400).json({ message: 'Número de minas inválido (1-24)' });
+
     const user = await User.findById(userId);
-    if (!user || user.balance < bet) return res.status(400).json({ message: 'Erro' });
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+    if (user.balance < bet) return res.status(400).json({ message: 'Saldo insuficiente' });
 
     user.balance = Math.floor(user.balance - bet);
     user.totalGamesPlayed = (user.totalGamesPlayed || 0) + 1;
     
-    // Gamification Hook
-    applyGameRewards(user, bet); // 1 Point per 1 Real
+    applyGameRewards(user, bet);
     updateMissions(user, 'bet_total', bet);
     updateMissions(user, 'mines_play', 1);
 
-    const mines = new Set();
-    while(mines.size < minesCount) mines.add(Math.floor(Math.random() * 25));
+    // -- TROPHY CHECK (Start) --
+    checkTrophies(user, { bet, winAmount: 0, gameType: 'MINES', outcome: 'NONE' });
+
+    const minesSet = new Set();
+    while(minesSet.size < mines) minesSet.add(Math.floor(Math.random() * 25));
 
     user.activeGame = {
-        type: 'MINES', bet, minesCount,
-        minesList: Array.from(mines), minesRevealed: [],
+        type: 'MINES', bet, minesCount: mines,
+        minesList: Array.from(minesSet), minesRevealed: [],
         minesMultiplier: 1.0, minesGameOver: false
     };
     
@@ -412,10 +519,21 @@ app.post('/api/mines/start', async (req, res) => {
 app.post('/api/mines/reveal', async (req, res) => {
     const { userId, tileId } = req.body;
     const user = await User.findById(userId);
-    if(!user || user.activeGame.type !== 'MINES') return res.status(400).json({message:'Erro'});
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+    if(user.activeGame.type !== 'MINES') return res.status(400).json({message:'Nenhum jogo ativo'});
     
     const game = user.activeGame;
     const target = Number(tileId);
+    
+    if (target < 0 || target > 24 || isNaN(target)) return res.status(400).json({message: 'Tile inválido'});
+
+    if(game.minesRevealed.includes(target)) {
+        return res.json({ 
+            outcome: 'GEM', status: 'PLAYING', 
+            profit: Math.floor(game.bet * game.minesMultiplier), multiplier: game.minesMultiplier,
+            newBalance: user.balance, loyaltyPoints: user.loyaltyPoints 
+        });
+    }
 
     if (game.minesList.includes(target)) {
         game.minesGameOver = true;
@@ -430,33 +548,35 @@ app.post('/api/mines/reveal', async (req, res) => {
         });
     }
 
-    if(!game.minesRevealed.includes(target)) {
-        game.minesRevealed.push(target);
-        // Multiplier Logic
-        const houseEdge = 0.97;
-        let mult = 1.0;
-        for(let i=0; i<game.minesRevealed.length; i++) {
-            let rem = 25 - i;
-            let safe = rem - game.minesCount;
-            mult *= (houseEdge / (safe/rem));
-        }
-        game.minesMultiplier = mult;
+    game.minesRevealed.push(target);
+    const houseEdge = 0.97;
+    let mult = 1.0;
+    for(let i=0; i<game.minesRevealed.length; i++) {
+        let rem = 25 - i;
+        let safe = rem - game.minesCount;
+        mult *= (houseEdge / (safe/rem));
     }
+    game.minesMultiplier = mult;
+
+    // -- TROPHY CHECK (Reveal - Sniper Check) --
+    checkTrophies(user, { bet: game.bet, winAmount: 0, gameType: 'MINES', outcome: 'NONE', extraData: { revealedCount: game.minesRevealed.length } });
 
     if (game.minesRevealed.length === 25 - game.minesCount) {
-        // Win All
         game.minesGameOver = true;
         game.type = 'NONE';
         const win = Math.floor(game.bet * game.minesMultiplier);
         user.balance += win;
         const profit = win - game.bet;
-        user.consecutiveWins++;
+        user.consecutiveWins = (user.consecutiveWins || 0) + 1;
         
         if (profit > 0) {
             applyGameRewards(user, Math.floor(profit * 0.5));
             updateMissions(user, 'profit_total', Math.floor(profit));
         }
         
+        // -- TROPHY CHECK (Win All) --
+        checkTrophies(user, { bet: game.bet, winAmount: profit, gameType: 'MINES', outcome: 'WIN' });
+
         user.markModified('activeGame');
         await user.save();
         
@@ -480,18 +600,24 @@ app.post('/api/mines/reveal', async (req, res) => {
 app.post('/api/mines/cashout', async (req, res) => {
     const { userId } = req.body;
     const user = await User.findById(userId);
-    if(!user || user.activeGame.type !== 'MINES') return res.status(400).json({message:'Erro'});
+    if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+    if(user.activeGame.type !== 'MINES') return res.status(400).json({message:'Nenhum jogo ativo para sacar'});
     
     const game = user.activeGame;
+    if (game.minesRevealed.length === 0) return res.status(400).json({message: 'Revele ao menos um campo'});
+
     const win = Math.floor(game.bet * game.minesMultiplier);
     user.balance += win;
     const profit = win - game.bet;
-    user.consecutiveWins++;
+    user.consecutiveWins = (user.consecutiveWins || 0) + 1;
 
     if(profit > 0) {
         applyGameRewards(user, Math.floor(profit * 0.5));
         updateMissions(user, 'profit_total', Math.floor(profit));
     }
+
+    // -- TROPHY CHECK (Cashout) --
+    checkTrophies(user, { bet: game.bet, winAmount: profit, gameType: 'MINES', outcome: 'WIN' });
 
     const mines = game.minesList;
     game.type = 'NONE';
@@ -512,7 +638,7 @@ app.post('/api/store/purchase', async (req, res) => {
             { $inc: { loyaltyPoints: -cost }, $push: { ownedItems: itemId } },
             { new: true }
         );
-        if (!user) return res.status(400).json({ message: 'Erro na compra' });
+        if (!user) return res.status(400).json({ message: 'Erro na compra (Pontos insuficientes ou item já possuído)' });
         res.json({ success: true, newPoints: user.loyaltyPoints, ownedItems: user.ownedItems });
     } catch (error) { res.status(500).json({ message: 'Erro' }); }
 });
@@ -520,25 +646,17 @@ app.post('/api/store/purchase', async (req, res) => {
 app.post('/api/balance', async (req, res) => {
     try {
         const { userId, newBalance } = req.body;
-        const user = await User.findByIdAndUpdate(userId, { balance: Math.floor(newBalance) }, { new: true });
+        const safeBalance = Math.max(0, Math.floor(newBalance));
+        const user = await User.findByIdAndUpdate(userId, { balance: safeBalance }, { new: true });
+        
+        // Check Trophies on Balance Update
+        if (user) {
+            checkTrophies(user, { bet: 0, winAmount: 0, gameType: 'NONE', outcome: 'NONE' });
+            await user.save();
+        }
+
         res.json({ balance: user ? user.balance : 0 });
     } catch (error) { res.status(500).json({ message: error.message }); }
-});
-
-app.post('/api/user/avatar', async (req, res) => {
-    try {
-        const { userId, avatarId } = req.body;
-        await User.findByIdAndUpdate(userId, { avatarId });
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ message: 'Erro' }); }
-});
-
-app.post('/api/user/verify', async (req, res) => {
-    try {
-        const { userId } = req.body;
-        await User.findByIdAndUpdate(userId, { documentsStatus: 'PENDING' });
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ message: 'Erro' }); }
 });
 
 const distPath = path.join(__dirname, 'dist');
@@ -552,6 +670,6 @@ if (fs.existsSync(distPath)) {
 
 const startServer = async () => {
   await connectDB();
-  app.listen(PORT, () => console.log(`🚀 Servidor na porta ${PORT}`));
+  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor na porta ${PORT}`));
 };
 startServer();
