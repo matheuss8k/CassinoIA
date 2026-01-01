@@ -1,8 +1,46 @@
 
 import { User } from '../types';
 
-// Detecta a URL da API baseada no ambiente.
-const API_URL = (import.meta as any).env?.VITE_API_URL || '/api';
+// --- CONFIGURAÇÃO DA API ---
+
+const GET_BASE_URL = () => {
+    // PROTEÇÃO CRÍTICA PARA PRODUÇÃO:
+    // Se o site não estiver rodando em localhost, FORÇA o uso do caminho relativo '/api'.
+    // Isso impede que variáveis de ambiente de desenvolvimento (como http://192.168.x.x)
+    // quebrem o app quando acessado via 4G/5G ou URLs públicas (Render).
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    
+    if (!isLocalhost) {
+        return '/api';
+    }
+
+    // Apenas em desenvolvimento local usamos a variável de ambiente ou fallback
+    const envUrl = (import.meta as any).env?.VITE_API_URL;
+    if (envUrl) return envUrl;
+    
+    return '/api';
+};
+
+const API_URL = GET_BASE_URL();
+
+// --- RETRY LOGIC (Para Cold Starts do Render) ---
+const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, backoff = 1000): Promise<Response> => {
+    try {
+        const response = await fetch(url, options);
+        // Se for erro de servidor (502, 503, 504), pode ser cold start ou deploy em andamento
+        if (response.status >= 502 && response.status <= 504 && retries > 0) {
+             throw new Error("Server warming up");
+        }
+        return response;
+    } catch (error: any) {
+        if (retries > 0) {
+            // Em produção silenciosa, não logamos o retry para o usuário
+            await new Promise(resolve => setTimeout(resolve, backoff));
+            return fetchWithRetry(url, options, retries - 1, backoff * 2);
+        }
+        throw error;
+    }
+};
 
 // Helper para tratar respostas da API com segurança
 const handleResponse = async (response: Response) => {
@@ -15,35 +53,47 @@ const handleResponse = async (response: Response) => {
     }
     return data;
   } else {
-    console.error("Non-JSON Response:", response.status, response.statusText);
-    throw new Error(`Erro inesperado do servidor: ${response.status}`);
+    if (response.status === 404) {
+        throw new Error("Serviço indisponível temporariamente.");
+    }
+    throw new Error(`Erro de conexão (${response.status}).`);
   }
 };
 
 export const DatabaseService = {
   // Create a new user via API
   createUser: async (userData: Partial<User>): Promise<User> => {
-    const response = await fetch(`${API_URL}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userData),
-    });
-    return handleResponse(response);
+    try {
+        const response = await fetchWithRetry(`${API_URL}/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(userData),
+        });
+        return handleResponse(response);
+    } catch (error: any) {
+        console.error("Register Error:", error);
+        throw error;
+    }
   },
 
   // Authenticate user via API
   login: async (username: string, password: string): Promise<User> => {
-    const response = await fetch(`${API_URL}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    return handleResponse(response);
+    try {
+        const response = await fetchWithRetry(`${API_URL}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        return handleResponse(response);
+    } catch (error: any) {
+        console.error("Login Error:", error);
+        throw error;
+    }
   },
   
   // SYNC USER DATA
   syncUser: async (userId: string) => {
-      const response = await fetch(`${API_URL}/user/sync`, {
+      const response = await fetchWithRetry(`${API_URL}/user/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId }),
@@ -54,7 +104,7 @@ export const DatabaseService = {
   // Update user balance via API (Wallet only)
   updateBalance: async (userId: string, newBalance: number): Promise<void> => {
     try {
-        await fetch(`${API_URL}/balance`, {
+        await fetchWithRetry(`${API_URL}/balance`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, newBalance }),
@@ -66,7 +116,7 @@ export const DatabaseService = {
 
   // --- USER PROFILE ---
   updateAvatar: async (userId: string, avatarId: string): Promise<{success: boolean, avatarId: string}> => {
-      const response = await fetch(`${API_URL}/user/avatar`, {
+      const response = await fetchWithRetry(`${API_URL}/user/avatar`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, avatarId }),
@@ -75,7 +125,7 @@ export const DatabaseService = {
   },
 
   requestVerification: async (userId: string): Promise<{success: boolean, documentsStatus: string}> => {
-      const response = await fetch(`${API_URL}/user/verify`, {
+      const response = await fetchWithRetry(`${API_URL}/user/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId }),
@@ -86,7 +136,7 @@ export const DatabaseService = {
   // --- SECURE BLACKJACK TRANSACTIONS ---
   
   blackjackDeal: async (userId: string, amount: number) => {
-      const response = await fetch(`${API_URL}/blackjack/deal`, {
+      const response = await fetchWithRetry(`${API_URL}/blackjack/deal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, amount }),
@@ -95,7 +145,7 @@ export const DatabaseService = {
   },
 
   blackjackHit: async (userId: string) => {
-      const response = await fetch(`${API_URL}/blackjack/hit`, {
+      const response = await fetchWithRetry(`${API_URL}/blackjack/hit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId }),
@@ -104,7 +154,7 @@ export const DatabaseService = {
   },
 
   blackjackStand: async (userId: string) => {
-      const response = await fetch(`${API_URL}/blackjack/stand`, {
+      const response = await fetchWithRetry(`${API_URL}/blackjack/stand`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId }),
@@ -115,7 +165,7 @@ export const DatabaseService = {
   // --- SECURE MINES LOGIC ---
   
   minesStart: async (userId: string, amount: number, minesCount: number) => {
-      const response = await fetch(`${API_URL}/mines/start`, {
+      const response = await fetchWithRetry(`${API_URL}/mines/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, amount, minesCount }),
@@ -124,7 +174,7 @@ export const DatabaseService = {
   },
 
   minesReveal: async (userId: string, tileId: number) => {
-      const response = await fetch(`${API_URL}/mines/reveal`, {
+      const response = await fetchWithRetry(`${API_URL}/mines/reveal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, tileId }),
@@ -133,7 +183,7 @@ export const DatabaseService = {
   },
 
   minesCashout: async (userId: string) => {
-      const response = await fetch(`${API_URL}/mines/cashout`, {
+      const response = await fetchWithRetry(`${API_URL}/mines/cashout`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId }),
@@ -143,7 +193,7 @@ export const DatabaseService = {
   
   // --- STORE ---
   purchaseItem: async (userId: string, itemId: string, cost: number) => {
-      const response = await fetch(`${API_URL}/store/purchase`, {
+      const response = await fetchWithRetry(`${API_URL}/store/purchase`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, itemId, cost }),
