@@ -4,9 +4,6 @@ import { User } from '../types';
 // --- CONFIGURAÇÃO DA API ---
 
 const GET_BASE_URL = () => {
-    // PROTEÇÃO CRÍTICA PARA PRODUÇÃO (RENDER):
-    // Quando rodando no Render (que não é localhost), usamos caminho relativo
-    // pois o server.js serve tanto a API quanto o Frontend na mesma porta.
     const hostname = window.location.hostname;
     const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
     
@@ -14,7 +11,6 @@ const GET_BASE_URL = () => {
         return '/api';
     }
 
-    // Em desenvolvimento local
     const envUrl = (import.meta as any).env?.VITE_API_URL;
     if (envUrl) return envUrl;
     
@@ -27,7 +23,6 @@ const API_URL = GET_BASE_URL();
 const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, backoff = 1000): Promise<Response> => {
     try {
         const response = await fetch(url, options);
-        // Se for erro de servidor 5xx, pode ser cold start
         if (response.status >= 502 && response.status <= 504 && retries > 0) {
              console.log(`Servidor acordando... (${retries} retries left)`);
              throw new Error("Server warming up");
@@ -46,16 +41,17 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, ba
 const handleResponse = async (response: Response) => {
   const contentType = response.headers.get("content-type");
   
+  // Tenta ler JSON sempre que possível, mesmo em erro 500
   if (contentType && contentType.includes("application/json")) {
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.message || `Erro do servidor (${response.status})`);
+      // Prioriza a mensagem vinda do servidor (ex: "Serviço indisponível: Erro de Banco de Dados")
+      throw new Error(data.message || data.details || `Erro do servidor (${response.status})`);
     }
     return data;
   } else {
-    // Se a resposta NÃO é JSON (ex: HTML de erro 500 do Render ou 404)
     const text = await response.text();
-    console.error("Non-JSON Response:", text.substring(0, 100)); // Log para debug
+    console.error("Non-JSON Response:", text.substring(0, 100)); 
     
     if (response.status === 404) {
         throw new Error("Serviço de API não encontrado (404).");

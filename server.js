@@ -9,6 +9,13 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// --- UTILS ---
+// Remove caracteres perigosos para Regex
+const escapeRegex = (text) => {
+    if (!text) return "";
+    return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+};
+
 // --- RATE LIMIT (Relaxado para Mobile/CGNAT) ---
 const createRateLimiter = ({ windowMs, max }) => {
     const requests = new Map();
@@ -47,10 +54,20 @@ app.use(express.json());
 const connectDB = async () => {
   try {
     const mongoURI = process.env.MONGODB_URI;
-    if (!mongoURI) { console.warn('⚠️ MONGODB_URI não definida.'); return; }
-    await mongoose.connect(mongoURI, { dbName: 'casino_ai_db' });
-    console.log(`✅ MongoDB Conectado`);
-  } catch (error) { console.error(`❌ Erro MongoDB: ${error.message}`); }
+    if (!mongoURI) { 
+        console.warn('⚠️ MONGODB_URI não definida no .env ou Painel do Render.'); 
+        return; 
+    }
+    // Log para debug (ocultando senha)
+    const maskedURI = mongoURI.replace(/:([^:@]+)@/, ':****@');
+    console.log(`🔌 Tentando conectar ao MongoDB: ${maskedURI}`);
+
+    await mongoose.connect(mongoURI, { dbName: 'casino_ai_db', serverSelectionTimeoutMS: 5000 });
+    console.log(`✅ MongoDB Conectado com Sucesso`);
+  } catch (error) { 
+    console.error(`❌ ERRO CRÍTICO MONGODB: ${error.message}`);
+    console.error(`Dica: Verifique se o IP 0.0.0.0/0 está liberado no MongoDB Atlas Network Access.`);
+  }
 };
 
 // --- SCHEMAS E MODELS ---
@@ -120,12 +137,33 @@ const generateDailyMissions = () => {
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const user = await User.findOne({ $or: [{ username: { $regex: new RegExp(`^${username}$`, 'i') } }, { email: { $regex: new RegExp(`^${username}$`, 'i') } }] });
+    
+    // Validação Básica
+    if (!username || !password) {
+        return res.status(400).json({ message: 'Preencha usuário e senha.' });
+    }
+
+    // Verificação de Conexão DB
+    if (mongoose.connection.readyState !== 1) {
+        console.error("Tentativa de login falhou: Banco de dados desconectado.");
+        return res.status(503).json({ message: 'Serviço indisponível: Erro de Banco de Dados.' });
+    }
+
+    // Busca Segura com Regex Escapado
+    const safeUser = escapeRegex(username);
+    const user = await User.findOne({ 
+        $or: [
+            { username: { $regex: new RegExp(`^${safeUser}$`, 'i') } }, 
+            { email: { $regex: new RegExp(`^${safeUser}$`, 'i') } }
+        ] 
+    });
+
     if (user && user.password === password) {
         user.balance = Math.floor(Number(user.balance) || 1000);
         user.loyaltyPoints = Math.floor(Number(user.loyaltyPoints) || 0);
         if (!user.missions) user.missions = [];
         if (!user.activeGame) user.activeGame = { type: 'NONE' };
+        
         const today = new Date().toISOString().split('T')[0];
         if (user.lastDailyReset !== today) {
             user.missions = generateDailyMissions();
@@ -133,20 +171,35 @@ app.post('/api/login', async (req, res) => {
             user.markModified('missions');
         }
         if (user.activeGame?.minesGameOver) user.activeGame = { type: 'NONE' };
+        
         await user.save();
         res.json(sanitizeUser(user));
-    } else { res.status(401).json({ message: 'Usuário ou senha incorretos.' }); }
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro interno.' }); }
+    } else { 
+        res.status(401).json({ message: 'Usuário ou senha incorretos.' }); 
+    }
+  } catch (error) { 
+      console.error("LOGIN ROUTE EXCEPTION:", error); 
+      res.status(500).json({ message: 'Erro interno no servidor.', details: error.message }); 
+  }
 });
 
 app.post('/api/register', async (req, res) => {
   try {
     const { fullName, username, email, cpf, birthDate, password } = req.body;
+    
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ message: 'Erro de conexão com Banco de Dados.' });
+    }
+
     const existing = await User.findOne({ $or: [{ username }, { email }, { cpf }] });
     if (existing) return res.status(400).json({ message: 'Usuário, Email ou CPF já cadastrados.' });
+    
     const user = await User.create({ fullName, username, email, cpf, birthDate, password, balance: 1000, missions: generateDailyMissions(), lastDailyReset: new Date().toISOString().split('T')[0] });
     res.status(201).json(sanitizeUser(user));
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar conta.' }); }
+  } catch (error) { 
+      console.error("REGISTER ERROR:", error);
+      res.status(500).json({ message: 'Erro ao criar conta.', details: error.message }); 
+  }
 });
 
 app.post('/api/user/sync', async (req, res) => {
@@ -317,43 +370,10 @@ if (fs.existsSync(distPath)) {
   });
 } else {
   // --- TELA DE MANUTENÇÃO / BUILD REQUIRED ---
-  // Se a pasta 'dist' não existe, mostramos uma página bonita instruindo o admin.
-  // Isso evita o erro de "Pasta não encontrada" no console e mantém o servidor de pé.
   console.warn(`⚠️ Pasta 'dist' não encontrada. Servindo página de manutenção.`);
-  
   app.get('*', (req, res) => {
     if (req.path.startsWith('/api')) return res.status(503).json({ message: 'Server Building...' });
-    res.status(503).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Cassino IA - Instalação Necessária</title>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <script src="https://cdn.tailwindcss.com"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-      </head>
-      <body class="bg-[#020617] text-white h-screen flex flex-col items-center justify-center font-['Outfit'] overflow-hidden relative">
-        <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
-        <div class="absolute w-96 h-96 bg-purple-600/20 rounded-full blur-[100px] -top-20 -left-20 animate-pulse"></div>
-        <div class="absolute w-96 h-96 bg-yellow-600/20 rounded-full blur-[100px] -bottom-20 -right-20 animate-pulse"></div>
-
-        <div class="relative z-10 text-center p-8 bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl max-w-lg mx-4">
-          <div class="w-20 h-20 bg-yellow-500/10 rounded-2xl border border-yellow-500/30 flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(234,179,8,0.2)]">
-            <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-          </div>
-          <h1 class="text-4xl font-black mb-2 tracking-tight">FRONTEND <span class="text-yellow-500">AUSENTE</span></h1>
-          <p class="text-slate-400 mb-6 leading-relaxed">O servidor backend está rodando perfeitamente, mas os arquivos do site ainda não foram gerados.</p>
-          
-          <div class="bg-black/50 rounded-xl p-4 text-left mb-6 border border-white/5">
-            <p class="text-xs text-slate-500 uppercase font-bold mb-2 tracking-wider">Execute no terminal:</p>
-            <code class="text-green-400 font-mono text-sm block">$ npm run build</code>
-            <p class="text-xs text-slate-600 mt-2">Após isso, reinicie o servidor com <span class="font-mono text-slate-400">npm start</span>.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `);
+    res.status(503).send(`<html><body><h1>Frontend Building...</h1><p>Run npm run build</p></body></html>`);
   });
 }
 
