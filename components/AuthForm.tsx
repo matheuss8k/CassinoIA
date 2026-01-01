@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
 import { Button } from './UI/Button';
-import { ShieldCheck, UserPlus, LogIn, Mail, User as UserIcon, WifiOff, Loader2 } from 'lucide-react';
+import { ShieldCheck, UserPlus, LogIn, Mail, WifiOff, Loader2 } from 'lucide-react';
 import { DatabaseService } from '../services/database';
 
 interface AuthFormProps {
@@ -128,8 +128,11 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
       }
     } catch (err: any) {
       let msg = err.message || 'Erro de conexão.';
-      if (msg.includes('Failed to fetch') || msg.includes('conexão')) {
-          msg = 'Não foi possível conectar ao servidor. Tente novamente em instantes.';
+      if (msg.includes('Failed to fetch') || msg.includes('conexão') || msg.includes('restarting') || msg.includes('503')) {
+          msg = 'O servidor está iniciando. Tente novamente em alguns segundos.';
+      }
+      if (msg.includes('bad auth') || msg.includes('8000')) {
+          msg = 'Erro interno de configuração (Auth). Contate o suporte.';
       }
       setError(msg);
     } finally {
@@ -184,7 +187,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
             {error && (
               <div className="space-y-2">
                   <div className="text-red-400 text-xs text-center bg-red-900/20 py-2 px-2 rounded-lg border border-red-900/50 animate-shake flex items-center justify-center gap-2">
-                    {error.includes('conexão') && <WifiOff size={14} />}
+                    {error.includes('servidor') || error.includes('conexão') ? <WifiOff size={14} /> : null}
                     {error}
                   </div>
               </div>

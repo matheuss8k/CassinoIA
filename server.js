@@ -27,8 +27,6 @@ const createRateLimiter = ({ windowMs, max }) => {
 
     return (req, res, next) => {
         if (req.ip === '127.0.0.1' || req.ip === '::1') return next();
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        // Lógica simplificada para evitar bloqueios falsos em proxies
         next();
     };
 };
@@ -59,24 +57,33 @@ const connectDB = async () => {
       return;
   }
 
-  // Tratamento de senha com caracteres especiais caso o usuário tenha esquecido de encodar
-  // Isso é apenas visual para o log, não altera a string real de conexão se ela já estiver correta
+  // Mascara senha para log de segurança
   const maskedURI = mongoURI.replace(/:([^:@]+)@/, ':****@');
-  console.log(`🔌 Tentando conectar ao MongoDB...`);
+  console.log(`🔌 Tentando conectar ao MongoDB (AuthSource: admin)...`);
 
   try {
+    // A opção authSource: 'admin' é crucial para usuários do Atlas
     await mongoose.connect(mongoURI, {
         dbName: 'casino_ai_db',
         serverSelectionTimeoutMS: 5000,
         connectTimeoutMS: 10000,
+        authSource: 'admin', 
+        retryWrites: true,
+        w: 'majority'
     });
     console.log(`✅ MongoDB Conectado com Sucesso!`);
     isConnecting = false;
   } catch (error) {
     console.error(`❌ Falha na conexão MongoDB: ${error.message}`);
+    
+    // Diagnóstico específico para erro de senha
+    if (error.code === 8000 || error.name === 'MongoServerError') {
+        console.error(`⚠️ ALERTA DE AUTENTICAÇÃO: Verifique se a senha no Render contém caracteres especiais não codificados ou se está incorreta.`);
+    }
+
     console.error(`🔄 Tentando novamente em 5 segundos...`);
     isConnecting = false;
-    setTimeout(connectDB, 5000); // Retry infinito
+    setTimeout(connectDB, 5000); 
   }
 };
 
@@ -159,9 +166,8 @@ app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     
     if (mongoose.connection.readyState !== 1) {
-        // Tenta reconectar forçadamente se receber uma requisição e estiver offline
         connectDB(); 
-        return res.status(503).json({ message: 'Banco de dados reconectando... Tente novamente em 5 segundos.' });
+        return res.status(503).json({ message: 'Sistema inicializando. Tente novamente em 10 segundos.' });
     }
 
     const safeUser = escapeRegex(username);
@@ -173,6 +179,7 @@ app.post('/api/login', async (req, res) => {
     });
 
     if (user && user.password === password) {
+        // Data Integrity Check
         user.balance = Math.floor(Number(user.balance) || 1000);
         user.loyaltyPoints = Math.floor(Number(user.loyaltyPoints) || 0);
         if (!user.missions) user.missions = [];
@@ -189,11 +196,11 @@ app.post('/api/login', async (req, res) => {
         await user.save();
         res.json(sanitizeUser(user));
     } else { 
-        res.status(401).json({ message: 'Usuário ou senha incorretos.' }); 
+        res.status(401).json({ message: 'Credenciais inválidas.' }); 
     }
   } catch (error) { 
       console.error("LOGIN ERROR:", error); 
-      res.status(500).json({ message: 'Erro interno no servidor.', details: error.message }); 
+      res.status(500).json({ message: 'Erro interno de servidor.' }); 
   }
 });
 
@@ -203,7 +210,7 @@ app.post('/api/register', async (req, res) => {
     
     if (mongoose.connection.readyState !== 1) {
         connectDB();
-        return res.status(503).json({ message: 'Banco de dados reconectando... Tente novamente.' });
+        return res.status(503).json({ message: 'Sistema inicializando. Tente novamente.' });
     }
 
     const existing = await User.findOne({ $or: [{ username }, { email }, { cpf }] });
@@ -213,14 +220,11 @@ app.post('/api/register', async (req, res) => {
     res.status(201).json(sanitizeUser(user));
   } catch (error) { 
       console.error("REGISTER ERROR:", error);
-      res.status(500).json({ message: 'Erro ao criar conta.', details: error.message }); 
+      res.status(500).json({ message: 'Erro ao criar conta.' }); 
   }
 });
 
-// ... (Restante das rotas sync, balance, jogos, mantidas iguais mas protegidas pelo middleware implícito do mongoose)
-// Vou omitir as rotas repetitivas para economizar espaço, elas usam os Models definidos acima.
-// As rotas de jogos (Blackjack/Mines) permanecem as mesmas das versões anteriores.
-
+// As rotas de jogos usam os models definidos acima
 app.post('/api/user/sync', async (req, res) => {
     try {
         const { userId } = req.body;
