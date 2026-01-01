@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { User, GameStatus } from '../types';
 import { DatabaseService } from '../services/database';
 import { Button } from './UI/Button';
-import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X } from 'lucide-react';
+import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull } from 'lucide-react';
 
 interface MinesGameProps {
   user: User;
@@ -20,6 +20,36 @@ const MIN_BET = 1;
 const MAX_BET = 100;
 const MAX_PROFIT = 500;
 const GRID_SIZE = 25;
+
+// Tabelas de Multiplicadores Padrão (Cópia do Server para Preview UI)
+const MINES_MULTIPLIERS: { [key: number]: number[] } = {
+    1: [1.01, 1.05, 1.10, 1.15, 1.21, 1.27, 1.34, 1.42, 1.51, 1.60, 1.71, 1.83, 1.97, 2.13, 2.31, 2.52, 2.77, 3.08, 3.46, 3.96, 4.62, 5.54, 6.93, 9.24],
+    2: [1.06, 1.13, 1.21, 1.30, 1.40, 1.52, 1.65, 1.81, 1.99, 2.20, 2.45, 2.75, 3.11, 3.56, 4.13, 4.85, 5.82, 7.16, 9.09, 12.01, 16.82, 25.72, 45.01],
+    3: [1.11, 1.22, 1.36, 1.52, 1.71, 1.95, 2.24, 2.61, 3.08, 3.69, 4.51, 5.63, 7.23, 9.58, 13.18, 18.98, 28.98, 47.96, 88.73, 192.25, 576.75],
+    5: [1.21, 1.45, 1.77, 2.21, 2.83, 3.73, 5.06, 7.11, 10.39, 15.87, 25.56, 43.82, 81.38, 167.31, 390.39, 1093.09, 4153.74, 24922.44],
+    10: [1.58, 2.64, 4.58, 8.39, 16.32, 34.27, 78.33, 198.44, 578.78, 2025.75, 9115.86, 60772.43]
+};
+
+const getMinesMultiplierPreview = (minesCount: number, nextRevealedCount: number): number => {
+    if (MINES_MULTIPLIERS[minesCount]) {
+        if (nextRevealedCount <= 0) return 1.0;
+        const index = nextRevealedCount - 1;
+        if (index < MINES_MULTIPLIERS[minesCount].length) {
+            return MINES_MULTIPLIERS[minesCount][index];
+        }
+    }
+    // Fallback formula
+    let multiplier = 1.0;
+    const houseEdge = 0.97;
+    for (let i = 0; i < nextRevealedCount; i++) {
+        const tilesLeft = 25 - i;
+        const safeLeft = 25 - minesCount - i;
+        if (safeLeft <= 0) break;
+        multiplier *= (1 / (safeLeft / tilesLeft));
+    }
+    return parseFloat((multiplier * houseEdge).toFixed(2));
+};
+
 
 export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [grid, setGrid] = useState<Tile[]>(Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' })));
@@ -39,6 +69,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [aiSuggestion, setAiSuggestion] = useState<number | null>(null);
   const [isAiScanning, setIsAiScanning] = useState<boolean>(false);
   const [cashoutWin, setCashoutWin] = useState<number | null>(null);
+  const [lossPopup, setLossPopup] = useState<boolean>(false);
   const [loadingTileId, setLoadingTileId] = useState<number | null>(null);
   const gameOverTimeoutRef = useRef<number | null>(null);
 
@@ -75,20 +106,36 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     };
   }, []);
 
+  // --- POPUP TIMERS ---
   useEffect(() => {
-      const remainingTiles = GRID_SIZE - revealedCount;
-      const safeTiles = remainingTiles - mineCount;
-      if (safeTiles > 0) {
-          const prob = safeTiles / remainingTiles;
-          const nextMult = (0.97 / prob) * currentMultiplier;
-          setNextMultiplierPreview(nextMult);
-      }
-  }, [revealedCount, mineCount, currentMultiplier]);
+    if (cashoutWin !== null) {
+        const timer = setTimeout(() => {
+            setCashoutWin(null);
+        }, 3000); // 3 segundos para sumir
+        return () => clearTimeout(timer);
+    }
+  }, [cashoutWin]);
+
+  useEffect(() => {
+    if (lossPopup) {
+        const timer = setTimeout(() => {
+            setLossPopup(false);
+        }, 3000); // 3 segundos para sumir
+        return () => clearTimeout(timer);
+    }
+  }, [lossPopup]);
+
+  // Update Preview
+  useEffect(() => {
+      // O próximo multiplicador é para revealedCount + 1
+      const nextMult = getMinesMultiplierPreview(mineCount, revealedCount + 1);
+      setNextMultiplierPreview(nextMult);
+  }, [revealedCount, mineCount]);
 
   const currentWinValue = useMemo(() => {
     if (status !== GameStatus.Playing) return 0;
-    if (profit > 0) return Math.floor(profit);
-    if (revealedCount > 0 && currentMultiplier > 1.0) return Math.floor(bet * currentMultiplier);
+    if (profit > 0) return profit; // Use raw profit (no floor)
+    if (revealedCount > 0 && currentMultiplier > 1.0) return bet * currentMultiplier; // Use raw calc (no floor)
     return 0;
   }, [status, profit, revealedCount, currentMultiplier, bet]);
 
@@ -118,6 +165,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
         gameOverTimeoutRef.current = null;
     }
     setCashoutWin(null);
+    setLossPopup(false);
     setAiSuggestion(null);
 
     if (bet < MIN_BET) return alert(`Mínimo R$ ${MIN_BET.toFixed(2)}`);
@@ -165,6 +213,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             newGrid[index].content = 'mine';
             setStatus(GameStatus.GameOver);
             playSound('bomb');
+            setLossPopup(true); // Show Loss Popup
             
             // Sync on Loss
             if (result.newBalance !== undefined) {
@@ -209,7 +258,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                  setStatus(GameStatus.GameOver);
                  playSound('cashout');
                  setCashoutWin(result.profit);
-                 setTimeout(() => setCashoutWin(null), 4000);
                  if (result.mines) {
                     result.mines.forEach((mineIdx: number) => {
                         newGrid[mineIdx].content = 'mine';
@@ -249,7 +297,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
         });
 
         playSound('cashout');
-        const winValue = Math.floor(result.profit || currentWinValue);
+        const winValue = result.profit || currentWinValue; // No floor
         setCashoutWin(winValue);
         setStatus(GameStatus.Idle);
         setAiSuggestion(null);
@@ -261,7 +309,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
              });
              setGrid(finalGrid);
         }
-        setTimeout(() => { setProfit(0); setCashoutWin(null); }, 3000);
+        setTimeout(() => { setProfit(0); }, 3000);
     } catch (e: any) {
         if (e.message && (e.message.includes("não encontrado") || e.message.includes("expirado"))) {
              setStatus(GameStatus.Idle);
@@ -388,21 +436,29 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     </div>
                 </div>
 
-                {status === GameStatus.GameOver && profit === 0 && !cashoutWin && (
-                     <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-                         <div className="bg-red-600/90 text-white px-8 py-4 rounded-2xl shadow-2xl border-4 border-red-800 transform scale-125 animate-bounce backdrop-blur-sm"><h2 className="text-3xl font-black uppercase tracking-widest drop-shadow-md">BOOM!</h2></div>
-                     </div>
-                )}
-
+                {/* WIN POPUP */}
                 {cashoutWin !== null && (
-                    <div onClick={() => setCashoutWin(null)} className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem] cursor-pointer">
+                    <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
                          <div className="relative pointer-events-none">
                             <div className="absolute inset-0 bg-green-500 blur-[30px] opacity-10 rounded-full animate-pulse"></div>
                             <div className="bg-slate-900/95 border-2 border-green-500 p-6 rounded-2xl shadow-[0_0_30px_rgba(34,197,94,0.3)] flex flex-col items-center gap-3 transform scale-100 animate-slide-up relative z-10 min-w-[250px]">
                                 <div className="p-3 bg-green-500/20 rounded-full mb-1 ring-2 ring-green-500/10"><Trophy size={32} className="text-green-400 drop-shadow-[0_0_10px_rgba(34,197,94,0.8)]" /></div>
                                 <div className="text-center"><p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-1">Você Sacou</p><p className="text-3xl md:text-4xl font-black text-white tracking-tight drop-shadow-lg">R$ <span className="text-transparent bg-clip-text bg-gradient-to-br from-green-400 to-emerald-600">{cashoutWin.toFixed(2)}</span></p></div>
                                 <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden"><div className="h-full bg-green-500 animate-[shine_2s_infinite]"></div></div>
-                                <p className="text-[9px] text-slate-500 mt-2 uppercase tracking-wide">Toque para continuar</p>
+                            </div>
+                         </div>
+                    </div>
+                )}
+
+                {/* LOSS POPUP */}
+                {lossPopup && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
+                         <div className="relative pointer-events-none">
+                            <div className="absolute inset-0 bg-red-500 blur-[30px] opacity-10 rounded-full animate-pulse"></div>
+                            <div className="bg-slate-900/95 border-2 border-red-500 p-6 rounded-2xl shadow-[0_0_30px_rgba(239,68,68,0.3)] flex flex-col items-center gap-3 transform scale-100 animate-slide-up relative z-10 min-w-[250px]">
+                                <div className="p-3 bg-red-500/20 rounded-full mb-1 ring-2 ring-red-500/10"><Skull size={32} className="text-red-400 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]" /></div>
+                                <div className="text-center"><p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-1">Fim de Jogo</p><p className="text-3xl md:text-4xl font-black text-white tracking-tight drop-shadow-lg text-transparent bg-clip-text bg-gradient-to-br from-red-400 to-red-600">DERROTA</p></div>
+                                <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden"><div className="h-full bg-red-500 animate-[shine_2s_infinite]"></div></div>
                             </div>
                          </div>
                     </div>
