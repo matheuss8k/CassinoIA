@@ -4,9 +4,12 @@
   "private": true,
   "version": "1.0.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "vite --host",
-    "build": "vite build",
+    "build": "node node_modules/vite/bin/vite.js build",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "node server.js"
