@@ -30,11 +30,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
     },
     {
       id: 'baccarat',
-      name: 'Baccarat IA',
-      description: 'Clássico Punto Banco. Conte com a ajuda da nossa IA para prever o vencedor!',
+      name: 'Baccarat',
+      description: 'Clássico Punto Banco. Aposte no Banqueiro, Jogador ou Empate.',
       icon: <Club size={40} className="text-slate-400" />,
       active: false,
-      bg: 'bg-slate-900/50 grayscale'
+      bg: 'bg-slate-900/20'
     },
     {
       id: 'roulette',
@@ -42,18 +42,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
       description: 'Aposte na sorte e nos números.',
       icon: <Dices size={40} className="text-slate-400" />,
       active: false,
-      bg: 'bg-slate-900/50 grayscale'
+      bg: 'bg-slate-900/20'
     }
   ];
 
   const arcadeGames: GameOption[] = [
+    {
+      id: 'mines',
+      name: 'Mines IA',
+      description: 'Campo minado. Conte com a ajuda da nossa IA para encontrar os campos seguros!',
+      icon: <Bomb size={40} className="text-red-500" />,
+      active: true,
+      bg: 'bg-gradient-to-br from-slate-900 to-slate-800'
+    },
     {
       id: 'tigrinho',
       name: 'Fortune Tiger',
       description: 'O famoso jogo do tigrinho. Multiplicadores insanos esperam por você!',
       icon: <Cat size={40} className="text-orange-500" />,
       active: false,
-      bg: 'bg-slate-900/50 grayscale'
+      bg: 'bg-slate-900/20'
     },
     {
       id: 'aviator',
@@ -61,16 +69,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
       description: 'Decole para lucros altos! Retire sua aposta antes que o avião exploda.',
       icon: <Rocket size={40} className="text-purple-500" />,
       active: false,
-      bg: 'bg-slate-900/50 grayscale',
+      bg: 'bg-slate-900/20',
       badge: 'CRASH'
-    },
-    {
-      id: 'mines',
-      name: 'Mines',
-      description: 'Encontre os diamantes e evite as bombas escondidas no campo.',
-      icon: <Bomb size={40} className="text-red-500" />,
-      active: false,
-      bg: 'bg-slate-900/50 grayscale'
     }
   ];
 
@@ -79,13 +79,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
         key={game.id}
         className={`
         relative rounded-2xl p-6 border border-white/5 overflow-hidden group transition-all duration-300 flex flex-col items-center text-center
-        ${game.active ? 'hover:border-casino-gold/50 hover:shadow-2xl hover:shadow-casino-gold/10 active:scale-95 cursor-pointer' : 'opacity-70 cursor-not-allowed'}
+        ${game.active 
+            ? 'hover:border-casino-gold/50 hover:shadow-2xl hover:shadow-casino-gold/10 active:scale-95 cursor-pointer opacity-100' 
+            : 'opacity-80 hover:opacity-100 border-white/5 cursor-default'}
         ${game.bg}
         `}
         onClick={() => game.active && onSelectGame(game.id)}
     >
         {game.badge && (
-        <div className={`absolute top-0 right-0 text-black text-[10px] font-bold px-2 py-0.5 rounded-bl-lg ${game.active ? 'bg-casino-gold' : 'bg-slate-500'}`}>
+        <div className={`absolute top-0 right-0 text-black text-[10px] font-bold px-2 py-0.5 rounded-bl-lg ${game.active ? 'bg-casino-gold' : 'bg-slate-600 text-slate-300'}`}>
             {game.badge}
         </div>
         )}
@@ -114,15 +116,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
                 JOGAR
             </Button>
         ) : (
-            <Button 
-                fullWidth 
-                variant="secondary" 
-                size="md" 
-                className="py-4"
-                disabled
-            >
-                EM BREVE
-            </Button>
+            // Botão "Fraco" para itens inativos - Agora mais visível
+            <div className="w-full py-4 rounded-lg border border-white/10 bg-slate-800/50 text-slate-400 text-xs font-bold tracking-widest uppercase select-none">
+                Em Breve
+            </div>
         )}
         </div>
     </div>

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { User } from './types';
+import { User } from '../types';
 import { AuthForm } from './components/AuthForm';
 import { Dashboard } from './components/Dashboard';
 import { BlackjackGame } from './components/BlackjackGame';
@@ -8,18 +8,30 @@ import { MinesGame } from './components/MinesGame';
 import { UserProfile } from './components/UserProfile';
 import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
-import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses } from 'lucide-react';
+import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star } from 'lucide-react';
 
-// Avatar mapping for Navbar
-const AVATAR_ICONS: Record<string, React.ReactNode> = {
-    '1': <UserIcon size={16} />,
-    '2': <Bot size={16} />,
-    '3': <Skull size={16} />,
-    '4': <Ghost size={16} />,
-    '5': <Sword size={16} />,
-    '6': <Zap size={16} />,
-    '7': <Glasses size={16} />,
-    '8': <Crown size={16} />,
+// Configuration for Avatar rendering in Navbar (Miniature)
+const getNavbarAvatar = (id: string) => {
+    switch (id) {
+        // Free Avatars
+        case '1': return { icon: <UserIcon size={16} />, bg: 'from-slate-700 to-slate-800' };
+        case '2': return { icon: <Bot size={16} />, bg: 'from-cyan-900 to-cyan-700' };
+        case '3': return { icon: <Skull size={16} />, bg: 'from-red-900 to-red-700' };
+        case '4': return { icon: <Ghost size={16} />, bg: 'from-purple-900 to-purple-700' };
+        case '5': return { icon: <Sword size={16} />, bg: 'from-orange-900 to-orange-700' };
+        case '6': return { icon: <Zap size={16} />, bg: 'from-yellow-700 to-yellow-500' };
+        case '7': return { icon: <Glasses size={16} />, bg: 'from-emerald-900 to-emerald-700' };
+        case '8': return { icon: <Crown size={16} />, bg: 'from-pink-900 to-pink-700' };
+        
+        // Premium Avatars
+        case 'avatar_rich': return { icon: <span className="text-xs font-black text-white">$</span>, bg: 'from-yellow-600 to-yellow-900' };
+        case 'avatar_alien': return { icon: <span className="text-xs">👽</span>, bg: 'from-green-600 to-emerald-900' };
+        case 'avatar_robot_gold': return { icon: <Bot size={16} className="text-yellow-200" />, bg: 'from-yellow-500 to-orange-600' };
+        case 'avatar_dragon': return { icon: <Zap size={16} className="text-red-200" />, bg: 'from-red-600 to-purple-900' };
+        
+        // Default
+        default: return { icon: <UserIcon size={16} />, bg: 'from-slate-700 to-slate-800' };
+    }
 };
 
 // Componente de Saldo com efeito Count-Up
@@ -141,6 +153,9 @@ const App: React.FC = () => {
       setUser(nextUser as User);
   };
 
+  // Get current avatar configuration for rendering
+  const avatarConfig = user ? getNavbarAvatar(user.avatarId) : null;
+
   return (
     <div className="h-screen w-full bg-slate-950 text-white font-sans overflow-hidden flex flex-col relative">
       {user && (
@@ -174,11 +189,8 @@ const App: React.FC = () => {
                 `}
                 title="Meu Perfil"
              >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors 
-                  ${currentView === 'profile' ? 'bg-casino-gold text-black' : 'bg-slate-700 text-slate-300 group-hover:text-white'}
-                `}>
-                    {/* Renderiza o ícone do avatar atual na navbar */}
-                    {user.avatarId ? AVATAR_ICONS[user.avatarId] : <UserIcon size={16} />}
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all bg-gradient-to-br ${avatarConfig?.bg || 'from-slate-700 to-slate-800'} text-white shadow-md border border-white/10`}>
+                    {avatarConfig?.icon}
                 </div>
                 <span className={`text-sm font-medium hidden sm:block transition-colors 
                   ${currentView === 'profile' ? 'text-white' : 'text-slate-300 group-hover:text-white'}

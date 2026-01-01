@@ -1,26 +1,34 @@
+
 import { User } from '../types';
 
 // Detecta a URL da API baseada no ambiente.
-// Em desenvolvimento (Vite proxy) e Produção (Express serving static), '/api' funciona bem.
-// Mas permite override via .env se necessário.
-const API_URL = import.meta.env?.VITE_API_URL || '/api';
+const API_URL = (import.meta as any).env?.VITE_API_URL || '/api';
+
+// Helper para tratar respostas da API com segurança
+const handleResponse = async (response: Response) => {
+  const contentType = response.headers.get("content-type");
+  
+  if (contentType && contentType.includes("application/json")) {
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Erro na requisição');
+    }
+    return data;
+  } else {
+    console.error("Non-JSON Response:", response.status, response.statusText);
+    throw new Error(`Erro inesperado do servidor: ${response.status}`);
+  }
+};
 
 export const DatabaseService = {
   // Create a new user via API
-  createUser: async (userData: Omit<User, 'id' | 'balance'>): Promise<User> => {
+  createUser: async (userData: Partial<User>): Promise<User> => {
     const response = await fetch(`${API_URL}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(userData),
     });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.message || 'Erro ao criar conta');
-    }
-
-    return data;
+    return handleResponse(response);
   },
 
   // Authenticate user via API
@@ -30,63 +38,116 @@ export const DatabaseService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.message || 'Erro ao realizar login');
-    }
-
-    return data;
+    return handleResponse(response);
+  },
+  
+  // SYNC USER DATA
+  syncUser: async (userId: string) => {
+      const response = await fetch(`${API_URL}/user/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+      });
+      return handleResponse(response);
   },
 
   // Update user balance via API (Wallet only)
   updateBalance: async (userId: string, newBalance: number): Promise<void> => {
-    const response = await fetch(`${API_URL}/balance`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, newBalance }),
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      console.error('Failed to sync balance:', data.message);
+    try {
+        await fetch(`${API_URL}/balance`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, newBalance }),
+        });
+    } catch (e) {
+        console.error('Network error syncing balance', e);
     }
   },
 
-  // --- SECURE GAME TRANSACTIONS ---
+  // --- USER PROFILE ---
+  updateAvatar: async (userId: string, avatarId: string): Promise<{success: boolean, avatarId: string}> => {
+      const response = await fetch(`${API_URL}/user/avatar`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, avatarId }),
+      });
+      return handleResponse(response);
+  },
+
+  requestVerification: async (userId: string): Promise<{success: boolean, documentsStatus: string}> => {
+      const response = await fetch(`${API_URL}/user/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+      });
+      return handleResponse(response);
+  },
+
+  // --- SECURE BLACKJACK TRANSACTIONS ---
   
-  // Deduz aposta atomicamente no servidor
-  placeBet: async (userId: string, amount: number): Promise<number> => {
-    const response = await fetch(`${API_URL}/game/bet`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, amount }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || 'Erro ao processar aposta');
-    }
-
-    return data.newBalance;
+  blackjackDeal: async (userId: string, amount: number) => {
+      const response = await fetch(`${API_URL}/blackjack/deal`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, amount }),
+      });
+      return handleResponse(response);
   },
 
-  // Processa pagamento no servidor
-  settleGame: async (userId: string, amount: number): Promise<number> => {
-    const response = await fetch(`${API_URL}/game/payout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, amount }),
-    });
+  blackjackHit: async (userId: string) => {
+      const response = await fetch(`${API_URL}/blackjack/hit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+      });
+      return handleResponse(response);
+  },
 
-    const data = await response.json();
+  blackjackStand: async (userId: string) => {
+      const response = await fetch(`${API_URL}/blackjack/stand`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+      });
+      return handleResponse(response);
+  },
 
-    if (!response.ok) {
-      throw new Error(data.message || 'Erro ao processar pagamento');
-    }
+  // --- SECURE MINES LOGIC ---
+  
+  minesStart: async (userId: string, amount: number, minesCount: number) => {
+      const response = await fetch(`${API_URL}/mines/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, amount, minesCount }),
+      });
+      return handleResponse(response);
+  },
 
-    return data.newBalance;
+  minesReveal: async (userId: string, tileId: number) => {
+      const response = await fetch(`${API_URL}/mines/reveal`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, tileId }),
+      });
+      return handleResponse(response);
+  },
+
+  minesCashout: async (userId: string) => {
+      const response = await fetch(`${API_URL}/mines/cashout`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+      });
+      return handleResponse(response);
+  },
+  
+  // --- STORE ---
+  purchaseItem: async (userId: string, itemId: string, cost: number) => {
+      const response = await fetch(`${API_URL}/store/purchase`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, itemId, cost }),
+      });
+      return handleResponse(response);
   }
 };

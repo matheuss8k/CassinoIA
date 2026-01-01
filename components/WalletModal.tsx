@@ -1,15 +1,18 @@
+
 import React, { useState } from 'react';
 import { Button } from './UI/Button';
-import { X, ArrowDownCircle, ArrowUpCircle, DollarSign } from 'lucide-react';
+import { X, ArrowDownCircle, ArrowUpCircle, DollarSign, Lock, AlertTriangle, ExternalLink } from 'lucide-react';
 
 interface WalletModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentBalance: number;
   onTransaction: (amount: number, type: 'deposit' | 'withdraw') => void;
+  isVerified?: boolean; // New prop to check verification status
+  onGoToProfile?: () => void; // Callback to redirect to profile
 }
 
-export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, currentBalance, onTransaction }) => {
+export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, currentBalance, onTransaction, isVerified = false, onGoToProfile }) => {
   const [amount, setAmount] = useState<string>('');
   const [mode, setMode] = useState<'deposit' | 'withdraw'>('deposit');
 
@@ -30,7 +33,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, curre
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
       <div className="bg-slate-900 border border-casino-gold/30 w-full max-w-md rounded-2xl p-6 relative shadow-2xl shadow-casino-gold/10">
         <button 
           onClick={onClose}
@@ -63,34 +66,58 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, curre
           </button>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-slate-300 mb-2 text-sm">Valor (R$)</label>
-            <input 
-              type="number"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-casino-gold"
-              placeholder="0.00"
-            />
-          </div>
+        {/* Withdrawal Lock Screen */}
+        {mode === 'withdraw' && !isVerified ? (
+            <div className="bg-red-900/10 border border-red-500/20 rounded-xl p-6 text-center flex flex-col items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center text-red-500">
+                    <Lock size={24} />
+                </div>
+                <div>
+                    <h3 className="text-white font-bold">Saque Bloqueado</h3>
+                    <p className="text-slate-400 text-xs mt-1">
+                        Para sua segurança, saques só são permitidos após a verificação de identidade (RG e Selfie).
+                    </p>
+                </div>
+                {onGoToProfile && (
+                    <button 
+                        onClick={() => { onClose(); onGoToProfile(); }}
+                        className="mt-2 text-xs bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors"
+                    >
+                        VERIFICAR CONTA <ExternalLink size={12} />
+                    </button>
+                )}
+            </div>
+        ) : (
+            /* Transaction Form */
+            <div className="space-y-4">
+            <div>
+                <label className="block text-slate-300 mb-2 text-sm">Valor (R$)</label>
+                <input 
+                type="number"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-casino-gold"
+                placeholder="0.00"
+                />
+            </div>
 
-          <div className="grid grid-cols-4 gap-2">
-             {[50, 100, 200, 500].map(val => (
-               <button 
-                key={val} 
-                onClick={() => setAmount(val.toString())}
-                className="bg-slate-800 hover:bg-slate-700 text-xs py-2 rounded border border-slate-700 text-slate-300"
-               >
-                 +{val}
-               </button>
-             ))}
-          </div>
+            <div className="grid grid-cols-4 gap-2">
+                {[50, 100, 200, 500].map(val => (
+                <button 
+                    key={val} 
+                    onClick={() => setAmount(val.toString())}
+                    className="bg-slate-800 hover:bg-slate-700 text-xs py-2 rounded border border-slate-700 text-slate-300"
+                >
+                    +{val}
+                </button>
+                ))}
+            </div>
 
-          <Button fullWidth onClick={handleTransaction} variant={mode === 'deposit' ? 'success' : 'danger'}>
-            Confirmar {mode === 'deposit' ? 'Depósito' : 'Saque'}
-          </Button>
-        </div>
+            <Button fullWidth onClick={handleTransaction} variant={mode === 'deposit' ? 'success' : 'danger'}>
+                Confirmar {mode === 'deposit' ? 'Depósito' : 'Saque'}
+            </Button>
+            </div>
+        )}
       </div>
     </div>
   );

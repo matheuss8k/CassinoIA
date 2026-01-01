@@ -1,7 +1,7 @@
 import React from 'react';
 import { Button } from './UI/Button';
 import { GameStatus } from '../types';
-import { Timer, RotateCcw, Trash2 } from 'lucide-react';
+import { RotateCcw, Trash2, Hand, ThumbsUp } from 'lucide-react';
 
 interface GameControlsProps {
   status: GameStatus;
@@ -12,9 +12,9 @@ interface GameControlsProps {
   onHit: () => void;
   onStand: () => void;
   onReset: () => void;
-  timeLeft?: number; // Betting countdown
-  decisionTime?: number; // Decision countdown (Hit/Stand)
-  lastBet?: number; // Previous round bet
+  timeLeft?: number;
+  decisionTime?: number;
+  lastBet?: number;
 }
 
 export const GameControls: React.FC<GameControlsProps> = ({
@@ -25,134 +25,120 @@ export const GameControls: React.FC<GameControlsProps> = ({
   onDeal,
   onHit,
   onStand,
-  onReset,
   timeLeft,
   decisionTime,
   lastBet
 }) => {
-  const chips = [1, 3, 5];
+  const chips = [1, 5, 10, 25, 50];
 
+  // --- ESTADO: APOSTA (IDLE / BETTING) ---
   if (status === GameStatus.Idle || status === GameStatus.Betting) {
     return (
-      <div className="flex flex-col items-center gap-0.5 animate-slide-up bg-black/70 p-3 rounded-2xl border border-white/10 backdrop-blur-md shadow-2xl min-w-[300px]">
-        {/* Chips Row & Utilities */}
-        <div className="flex gap-4 justify-center items-center mb-0">
-          {chips.map((chip) => (
-            <button
-              key={chip}
-              disabled={balance < chip}
-              onClick={() => onBet(chip)}
-              className="relative group transition-transform hover:-translate-y-1 disabled:opacity-30 disabled:hover:translate-y-0 active:scale-95"
-            >
-              <div className={`
-                w-10 h-10 sm:w-14 sm:h-14 rounded-full border-[4px] border-dashed flex items-center justify-center font-black text-white shadow-xl
-                ${chip === 1 ? 'bg-blue-600 border-blue-400 text-sm sm:text-lg' : ''}
-                ${chip === 3 ? 'bg-green-600 border-green-400 text-sm sm:text-lg' : ''}
-                ${chip === 5 ? 'bg-red-600 border-red-400 text-sm sm:text-lg' : ''}
-              `}>
-                {chip}
-              </div>
-              <div className="absolute inset-0 rounded-full shadow-[inset_0_0_10px_rgba(0,0,0,0.5)] pointer-events-none"></div>
-            </button>
-          ))}
-          
-          {/* Utilities Column */}
-          <div className="flex flex-col gap-2">
-               {/* Re-bet Button */}
-               {lastBet !== undefined && lastBet > 0 && (
-                 <button 
-                    onClick={() => onBet(lastBet)}
-                    disabled={balance < lastBet}
-                    className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-slate-800 border-2 border-slate-600 flex items-center justify-center text-slate-300 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-30 group relative"
-                    title={`Repetir aposta de R$ ${lastBet}`}
-                 >
-                    <RotateCcw size={14} />
-                    <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[9px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-                        Repetir ({lastBet})
-                    </span>
-                 </button>
-               )}
-
-               {/* Clear Button (Smaller now) */}
-               <button 
-                 onClick={() => onBet(0)}
-                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-slate-900 border-2 border-red-900/50 flex items-center justify-center text-red-400 hover:bg-red-900/20 transition-colors group relative"
-                 title="Limpar aposta"
-               >
-                 <Trash2 size={14} />
-                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[9px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                    Limpar
-                 </span>
-               </button>
-          </div>
-        </div>
+      <div className="w-[280px] bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-2xl p-3 shadow-2xl animate-slide-up relative z-50">
         
-        {/* Info Row: Bet Amount - Compacted */}
-        <div className="flex items-center gap-2 my-1">
-           <span className="text-[10px] text-slate-400 uppercase tracking-widest">Aposta:</span>
-           <span className="text-xl font-bold text-casino-gold leading-none">R$ {currentBet.toFixed(2)}</span>
+        {/* Top Row: Tools & Display */}
+        <div className="flex items-center gap-2 mb-3">
+            {/* Rebet (Compact) */}
+            <button 
+                onClick={() => lastBet && onBet(lastBet)}
+                disabled={!lastBet || balance < lastBet}
+                className="w-8 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700 active:scale-95 transition-all disabled:opacity-20"
+                title="Repetir"
+            >
+                <RotateCcw size={14} />
+            </button>
+
+            {/* Display (Compact) */}
+            <div className="flex-1 h-10 bg-black/60 rounded-lg border border-white/5 flex flex-col items-center justify-center relative overflow-hidden">
+                <div className="text-[7px] text-slate-500 font-bold uppercase tracking-widest">Aposta</div>
+                <div className="text-base font-mono font-bold text-casino-gold leading-none">
+                    R$ {currentBet.toFixed(2)}
+                </div>
+                {/* Scanline subtle */}
+                <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent opacity-20 pointer-events-none"></div>
+            </div>
+
+            {/* Clear (Compact) */}
+            <button 
+                onClick={() => onBet(0)}
+                disabled={currentBet === 0}
+                className="w-8 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-red-900/70 hover:text-red-500 hover:bg-slate-700 active:scale-95 transition-all disabled:opacity-20"
+                title="Limpar"
+            >
+                <Trash2 size={14} />
+            </button>
         </div>
 
-        {/* Action Button without Timer */}
-        <div className="w-full max-w-[320px]">
-             <div className="relative w-full">
-                <Button 
-                    onClick={onDeal} 
-                    size="md" 
-                    variant={currentBet > 0 ? "success" : "secondary"}
-                    fullWidth
-                    disabled={currentBet === 0}
-                    className="shadow-casino-gold/10 shadow-lg border-b-2 relative transition-all"
+        {/* Middle Row: Chips (Compact & Centered) */}
+        <div className="flex justify-center gap-1.5 mb-3">
+            {chips.map((chip) => (
+                <button
+                    key={chip}
+                    disabled={balance < chip}
+                    onClick={() => onBet(chip)}
+                    className="relative group transition-transform hover:-translate-y-1 active:scale-95 disabled:opacity-30 disabled:grayscale"
                 >
-                    <span className="relative z-10 flex items-center gap-2 justify-center whitespace-nowrap">
-                       {currentBet > 0 ? 'JOGAR AGORA' : 'FAÇA SUA APOSTA'}
-                    </span>
-                </Button>
-             </div>
+                    <div className={`
+                        w-10 h-10 rounded-full border-[3px] border-dashed flex items-center justify-center font-black text-white shadow-lg text-xs
+                        ${chip === 1 ? 'bg-blue-600 border-blue-400' : ''}
+                        ${chip === 5 ? 'bg-red-600 border-red-400' : ''}
+                        ${chip === 10 ? 'bg-green-600 border-green-400' : ''}
+                        ${chip === 25 ? 'bg-purple-600 border-purple-400' : ''}
+                        ${chip === 50 ? 'bg-orange-600 border-orange-400' : ''}
+                    `}>
+                        {chip}
+                    </div>
+                </button>
+            ))}
         </div>
+
+        {/* Bottom Row: Action Button */}
+        <Button 
+            onClick={onDeal} 
+            size="md" 
+            variant={currentBet > 0 ? "success" : "secondary"}
+            fullWidth
+            disabled={currentBet === 0}
+            className="h-10 text-sm font-black tracking-widest shadow-lg rounded-xl flex items-center justify-center"
+        >
+            {currentBet > 0 ? 'JOGAR' : 'APOSTAR'}
+        </Button>
       </div>
     );
   }
 
+  // --- ESTADO: JOGANDO (PLAYING) ---
   if (status === GameStatus.Playing) {
     return (
-      <div className="relative flex flex-col items-center justify-center">
-        
-        <div className="flex gap-4 justify-center items-center bg-black/60 p-3 pr-5 rounded-2xl backdrop-blur-md border border-white/10 shadow-2xl">
-          <Button onClick={onHit} variant="primary" size="md" className="min-w-[100px] text-lg font-black shadow-xl hover:-translate-y-1">
-            PEDIR
-          </Button>
-          <Button onClick={onStand} variant="danger" size="md" className="min-w-[100px] text-lg font-black shadow-xl hover:-translate-y-1">
-            PARAR
-          </Button>
+      <div className="w-[280px] animate-slide-up flex justify-center gap-3">
+         
+            {/* Stand Button */}
+            <button 
+                onClick={onStand}
+                className="flex-1 h-14 bg-red-600 hover:bg-red-500 rounded-xl border-b-4 border-red-800 active:border-b-0 active:translate-y-1 transition-all shadow-lg flex flex-col items-center justify-center gap-1"
+            >
+                <Hand className="text-white" size={18} />
+                <span className="text-[10px] font-black text-white uppercase tracking-wider">Parar</span>
+            </button>
 
-          {/* Decision Timer - Side Positioned */}
-          {decisionTime !== undefined && (
-            <div className="flex flex-col items-center justify-center ml-2 border-l border-white/10 pl-4">
-              <div className="relative">
-                 <Timer size={20} className={`mb-1 ${decisionTime <= 3 ? 'text-red-500 animate-pulse' : 'text-casino-gold'}`} />
-                 {/* Circular Progress Indicator Ring (CSS based) */}
-                 <svg className="absolute -top-1 -left-1 w-[28px] h-[28px] rotate-[-90deg]">
-                    <circle cx="14" cy="14" r="12" stroke="currentColor" strokeWidth="2" fill="transparent" className="text-slate-800" />
-                    <circle 
-                        cx="14" cy="14" r="12" 
-                        stroke="currentColor" 
-                        strokeWidth="2" 
-                        fill="transparent" 
-                        className={decisionTime <= 3 ? 'text-red-500' : 'text-casino-gold'}
-                        strokeDasharray={75}
-                        strokeDashoffset={75 - (75 * decisionTime) / 10}
-                        strokeLinecap="round"
-                    />
-                 </svg>
-              </div>
-              <span className={`text-xs font-mono font-bold leading-none ${decisionTime <= 3 ? 'text-red-500' : 'text-slate-300'}`}>
-                {decisionTime}s
-              </span>
-            </div>
-          )}
-        </div>
-        
+            {/* Decision Timer (Compact Center) */}
+            {decisionTime !== undefined && (
+                <div className="flex flex-col items-center justify-center w-14 h-14 bg-slate-900/90 rounded-full border-2 border-slate-700 shadow-xl shrink-0">
+                     <span className={`text-lg font-mono font-bold leading-none ${decisionTime <= 3 ? 'text-red-500 animate-pulse' : 'text-white'}`}>
+                        {decisionTime}
+                    </span>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase">SEC</span>
+                </div>
+            )}
+
+            {/* Hit Button */}
+            <button 
+                onClick={onHit}
+                className="flex-1 h-14 bg-green-600 hover:bg-green-500 rounded-xl border-b-4 border-green-800 active:border-b-0 active:translate-y-1 transition-all shadow-lg flex flex-col items-center justify-center gap-1"
+            >
+                <ThumbsUp className="text-white" size={18} />
+                <span className="text-[10px] font-black text-white uppercase tracking-wider">Pedir</span>
+            </button>
       </div>
     );
   }

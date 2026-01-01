@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { User } from '../types';
 import { Button } from './UI/Button';
@@ -11,7 +12,8 @@ interface AuthFormProps {
 const FORBIDDEN_USERNAMES = [
   'admin', 'root', 'suporte', 'moderador', 'system', 'sistema', 
   'merda', 'bosta', 'pinto', 'cu', 'caralho', 'puta', 'viado', 'sexo',
-  'buceta', 'fdp', 'lixo', 'teste', 'usuario', '12345', 'qwerty', 'abcde'
+  'buceta', 'fdp', 'lixo', 'teste', 'usuario', '12345', 'qwerty', 'abcde',
+  'cassino', 'casino', 'bet', 'ganhar', 'lucro', 'hacker', 'bot'
 ];
 
 export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
@@ -80,14 +82,13 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
   };
 
   const validateUsername = (name: string): string | null => {
-    const cleanName = name.trim();
+    const cleanName = name.trim().toLowerCase();
     if (cleanName.length < 4) return "Usuário: min. 4 caracteres.";
     if (!/^[a-zA-Z0-9_]+$/.test(cleanName)) return "Usuário: apenas letras e números.";
     if (/^(\w)\1+$/.test(cleanName)) return "Usuário inválido (repetitivo).";
     
-    const lowerName = cleanName.toLowerCase();
-    if (FORBIDDEN_USERNAMES.some(bad => lowerName.includes(bad))) {
-      return "Nome de usuário impróprio.";
+    if (FORBIDDEN_USERNAMES.some(bad => cleanName.includes(bad))) {
+      return "Nome de usuário indisponível ou impróprio.";
     }
     return null;
   };
@@ -189,14 +190,10 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
     <div className="flex flex-col items-center justify-center min-h-screen p-4 relative z-10">
       <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
         
-        {/* Decorative background glow */}
-        <div className="absolute -top-20 -right-20 w-64 h-64 bg-casino-purple/40 rounded-full blur-3xl"></div>
-        <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-casino-gold/20 rounded-full blur-3xl"></div>
-
         <div className="relative z-10">
           <div className="text-center mb-4">
             <h1 className="text-3xl font-extrabold text-white mb-1 tracking-tight">CASSINO IA</h1>
-            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">O Primeiro Cassino IA do Brasil!</p>
+            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">Experiência Premium</p>
           </div>
 
           {/* Compact Tabs */}

@@ -1,3 +1,4 @@
+
 export enum Suit {
   Hearts = '♥',
   Diamonds = '♦',
@@ -16,27 +17,90 @@ export interface Card {
   rank: Rank;
   value: number;
   isHidden?: boolean;
-  id: string; // Unique ID for React keys and animations
+  id: string; 
+}
+
+// Gamification Types
+export interface Mission {
+  id: string;
+  type: 'blackjack_win' | 'mines_play' | 'bet_total' | 'profit_total';
+  description: string;
+  target: number;
+  current: number;
+  rewardPoints: number; // Only Points remain
+  completed: boolean;
+}
+
+export interface Trophy {
+  id: string;
+  name: string;
+  description: string;
+  icon: string; // Lucide icon name or emoji
+  unlockedAt?: string; // Date ISO string
+}
+
+export interface StoreItem {
+  id: string;
+  name: string;
+  description: string;
+  cost: number;
+  type: 'cosmetic' | 'consumable';
+  icon: string;
+}
+
+// Interface para restaurar estado do jogo
+export interface ActiveGame {
+  type: 'BLACKJACK' | 'MINES' | 'NONE';
+  bet: number;
+  // BJ Props
+  bjPlayerHand?: Card[];
+  bjDealerHand?: Card[];
+  bjStatus?: string;
+  // Mines Props
+  minesCount?: number;
+  minesRevealed?: number[]; // IDs dos tiles revelados
+  minesMultiplier?: number;
 }
 
 export interface User {
   id: string;
-  fullName: string; // Novo campo
+  fullName: string;
   username: string;
   email: string;
   cpf: string;
-  birthDate?: string;
+  birthDate: string;
   balance: number;
-  password?: string; // In a real app, never store plain text password on client state
+  consecutiveWins: number;
+  password?: string;
+  
+  // Profile
+  avatarId: string;
+  isVerified: boolean;
+  documentsStatus: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';
+  vipLevel?: number;
+  
+  // Gamification (Simplified)
+  loyaltyPoints: number; // Moeda da loja
+  missions: Mission[];
+  unlockedTrophies: string[]; // IDs dos troféus
+  ownedItems: string[]; // IDs dos itens comprados
+  lastDailyReset: string; // Data do último reset de missões
+  
+  // Stats for Trophies
+  totalGamesPlayed: number;
+  totalBlackjacks: number;
+
+  // Session Restore
+  activeGame?: ActiveGame;
 }
 
 export enum GameStatus {
-  Idle = 'IDLE',      // Waiting for bet
-  Betting = 'BETTING', // Chips selection
-  Dealing = 'DEALING', // Initial 4 cards
-  Playing = 'PLAYING', // Player decisions
-  DealerTurn = 'DEALER_TURN', // Dealer hitting
-  GameOver = 'GAME_OVER' // Result display
+  Idle = 'IDLE',      
+  Betting = 'BETTING', 
+  Dealing = 'DEALING', 
+  Playing = 'PLAYING', 
+  DealerTurn = 'DEALER_TURN', 
+  GameOver = 'GAME_OVER' 
 }
 
 export enum GameResult {
