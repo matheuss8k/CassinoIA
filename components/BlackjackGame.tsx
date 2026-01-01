@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, GameStatus, GameResult, User } from '../types';
 import { calculateScore } from '../services/gameLogic';
 import { CardComponent } from './CardComponent';
@@ -15,6 +15,57 @@ interface BlackjackGameProps {
 
 const MIN_BET = 1;
 const MAX_BET = 50;
+
+// --- OPTIMIZED SOUND SYNTHESIZER (Singleton Pattern) ---
+let audioCtx: AudioContext | null = null;
+
+const playSynthSound = (type: 'chip' | 'card' | 'win' | 'lose') => {
+    try {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        // Resume context if suspended (browser autoplay policy)
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
+        const ctx = audioCtx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        if (type === 'chip') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(800, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+            osc.start(); osc.stop(ctx.currentTime + 0.1);
+        } else if (type === 'card') {
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(600, ctx.currentTime);
+            gain.gain.setValueAtTime(0.05, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+            osc.start(); osc.stop(ctx.currentTime + 0.05);
+        } else if (type === 'win') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(440, ctx.currentTime);
+            osc.frequency.setValueAtTime(554, ctx.currentTime + 0.1); // C#
+            osc.frequency.setValueAtTime(659, ctx.currentTime + 0.2); // E
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+            osc.start(); osc.stop(ctx.currentTime + 0.6);
+        } else if (type === 'lose') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, ctx.currentTime);
+            osc.frequency.linearRampToValueAtTime(100, ctx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
+            osc.start(); osc.stop(ctx.currentTime + 0.3);
+        }
+    } catch (e) { console.warn("Audio not supported"); }
+};
 
 const ScoreBadge = ({ score, label, hidden }: { score: number, label: string, hidden?: boolean }) => (
     <div className="mt-2 flex flex-col items-center animate-fade-in z-20">
@@ -67,16 +118,25 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   const [isProcessing, setIsProcessing] = useState(false);
   const [bettingTimer, setBettingTimer] = useState<number>(10);
   const [decisionTimer, setDecisionTimer] = useState<number>(10);
+  
+  const isMounted = useRef(true);
+  const hasRestored = useRef(false);
 
-  // --- RESTORE SESSION LOGIC ---
   useEffect(() => {
-      if (user.activeGame && user.activeGame.type === 'BLACKJACK' && status === GameStatus.Idle) {
+      isMounted.current = true;
+      return () => { isMounted.current = false; };
+  }, []);
+
+  // --- RESTORE SESSION LOGIC (ONLY ON MOUNT) ---
+  useEffect(() => {
+      if (hasRestored.current) return;
+      hasRestored.current = true;
+
+      if (user.activeGame && user.activeGame.type === 'BLACKJACK') {
           const game = user.activeGame;
-          // Restore Hand without animation
           setBet(game.bet);
           if (game.bjPlayerHand) setPlayerHand(game.bjPlayerHand);
           if (game.bjDealerHand) {
-              // Ensure we hide the hole card if status is playing
               const visibleDealer = (game.bjStatus === 'PLAYING')
                  ? [game.bjDealerHand[0], { ...game.bjDealerHand[1], isHidden: true }]
                  : game.bjDealerHand;
@@ -84,7 +144,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
           }
           setStatus(GameStatus.Playing);
       }
-  }, [user.activeGame]);
+  }, []); // Empty dependency array = run once on mount
 
   useEffect(() => {
     let timer: number;
@@ -111,7 +171,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     return () => clearTimeout(timer);
   }, [decisionTimer, status]);
 
-  const playSound = (type: 'chip' | 'card' | 'win' | 'lose') => {};
+  const playSound = (type: 'chip' | 'card' | 'win' | 'lose') => {
+      playSynthSound(type);
+  };
 
   const initializeGame = () => {
     setPlayerHand([]);
@@ -148,17 +210,18 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
 
     try {
         const data = await DatabaseService.blackjackDeal(user.id, bet);
-        setIsProcessing(false); 
         
+        if (!isMounted.current) return;
+
+        setStatus(GameStatus.Dealing);
+        setLastBet(bet);
+        setResult(GameResult.None);
+
         updateUser({ 
             balance: data.newBalance,
             loyaltyPoints: data.loyaltyPoints,
         });
 
-        setLastBet(bet);
-        setResult(GameResult.None);
-        setStatus(GameStatus.Dealing);
-        
         const pHand = data.playerHand;
         const dHand = data.dealerHand;
 
@@ -186,12 +249,14 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         } else {
             setDecisionTimer(10);
             setStatus(GameStatus.Playing);
+            setIsProcessing(false); 
         }
         
     } catch (error) {
         console.error("Deal error:", error);
         alert("Erro ao conectar com o servidor.");
         setIsProcessing(false);
+        setStatus(GameStatus.Idle);
         setBet(0);
     }
   };
@@ -203,7 +268,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
 
     try {
         const data = await DatabaseService.blackjackHit(user.id);
-        setIsProcessing(false);
+        
+        if (!isMounted.current) return;
+
         setPlayerHand(data.playerHand);
         playSound('card');
 
@@ -217,6 +284,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         if (data.status === 'GAME_OVER') {
              setDealerHand(data.dealerHand);
              endGame(data.result);
+        } else {
+             setIsProcessing(false);
         }
     } catch (e) {
         console.error(e);
@@ -229,7 +298,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     setIsProcessing(true);
     try {
         const data = await DatabaseService.blackjackStand(user.id);
-        setIsProcessing(false);
+        
+        if (!isMounted.current) return;
+
         setStatus(GameStatus.DealerTurn);
 
         const finalDealerHand = data.dealerHand;
@@ -269,8 +340,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     setStatus(GameStatus.GameOver);
     setIsProcessing(false);
 
-    // Final Sync to catch any last millisecond updates from backend logic
     setTimeout(async () => {
+        if (!isMounted.current) return;
         try {
             const syncData = await DatabaseService.syncUser(user.id);
             updateUser(syncData);
@@ -278,6 +349,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     }, 1000);
 
     setTimeout(() => {
+      if (!isMounted.current) return;
       setPlayerHand([]);
       setDealerHand([]);
       setBet(0);

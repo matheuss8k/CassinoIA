@@ -1,16 +1,19 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import { User } from './types';
 import { AuthForm } from './components/AuthForm';
-import { Dashboard } from './components/Dashboard';
-import { BlackjackGame } from './components/BlackjackGame';
-import { MinesGame } from './components/MinesGame';
-import { UserProfile } from './components/UserProfile';
 import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
-import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses } from 'lucide-react';
+import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star } from 'lucide-react';
 
-// Configuration for Avatar rendering in Navbar (Miniature)
+// --- LAZY LOADING ---
+const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
+const BlackjackGame = lazy(() => import('./components/BlackjackGame').then(module => ({ default: module.BlackjackGame })));
+const MinesGame = lazy(() => import('./components/MinesGame').then(module => ({ default: module.MinesGame })));
+const UserProfile = lazy(() => import('./components/UserProfile').then(module => ({ default: module.UserProfile })));
+
+// --- CONFIGURAÇÃO DE AVATAR (Navbar) ---
 const getNavbarAvatar = (id: string) => {
     switch (id) {
         // Free Avatars
@@ -107,62 +110,129 @@ const BalanceDisplay = ({ balance, onClick }: { balance: number, onClick: () => 
   );
 };
 
-const App: React.FC = () => {
+// --- LAYOUT DA APLICAÇÃO (NAVBAR + CONTENT) ---
+const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, children: React.ReactNode, onLogout: () => void, onOpenWallet: () => void }) => {
+    const location = useLocation();
+    const isDashboard = location.pathname === '/';
+    const avatarConfig = getNavbarAvatar(user.avatarId);
+
+    return (
+        <div className="h-screen w-full bg-slate-950 text-white font-sans overflow-hidden flex flex-col relative">
+            <nav className="h-16 flex-none border-b border-white/10 bg-slate-900/80 backdrop-blur-md px-4 flex items-center justify-between sticky top-0 z-40">
+                <div className="flex items-center gap-4">
+                    {!isDashboard && (
+                        <Link to="/" className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 transition-colors flex items-center justify-center" title="Voltar ao Lobby">
+                            <ChevronLeft size={20} />
+                        </Link>
+                    )}
+                    <Link to="/" className="flex items-center gap-2 cursor-pointer select-none group">
+                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-casino-gold to-yellow-600 flex items-center justify-center font-bold text-black shadow-lg shadow-yellow-500/20 group-hover:scale-105 transition-transform">IA</div>
+                        <span className="font-bold hidden sm:block group-hover:text-casino-gold transition-colors">CASSINO IA</span>
+                    </Link>
+                </div>
+                <div className="flex items-center gap-4">
+                    <BalanceDisplay balance={user.balance} onClick={onOpenWallet} />
+                    
+                    <Link to="/profile" className={`flex items-center gap-2 p-1.5 rounded-lg transition-all group border border-transparent ${location.pathname === '/profile' ? 'bg-slate-800 border-white/10' : 'hover:bg-slate-800/50'}`} title="Meu Perfil">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all bg-gradient-to-br ${avatarConfig.bg} text-white shadow-md border border-white/10`}>{avatarConfig.icon}</div>
+                        <span className={`text-sm font-medium hidden sm:block transition-colors ${location.pathname === '/profile' ? 'text-white' : 'text-slate-300 group-hover:text-white'}`}>{user.username}</span>
+                    </Link>
+                    
+                    <button onClick={onLogout} className="p-2 text-slate-500 hover:text-red-400 transition-colors" title="Sair"><LogOut size={20} /></button>
+                </div>
+            </nav>
+            <main className="flex-1 relative w-full overflow-y-auto no-scrollbar flex flex-col z-10">
+                <Suspense fallback={
+                    <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm z-50">
+                        <div className="flex flex-col items-center gap-4">
+                             <div className="w-12 h-12 border-4 border-casino-gold border-t-transparent rounded-full animate-spin"></div>
+                             <p className="text-slate-500 text-xs font-bold uppercase tracking-widest animate-pulse">Carregando Jogo...</p>
+                        </div>
+                    </div>
+                }>
+                    {children}
+                </Suspense>
+            </main>
+            <footer className="flex-none text-center py-2 text-slate-600 text-xs z-10 select-none">&copy; 2024 Cassino IA. Jogue com responsabilidade.</footer>
+        </div>
+    );
+};
+
+// --- WRAPPER PARA ROTAS PROTEGIDAS (DEFINIDO FORA PARA EVITAR REMOUNT) ---
+interface ProtectedRouteProps {
+    user: User | null;
+    onLogout: () => void;
+    onOpenWallet: () => void;
+    children: React.ReactNode;
+}
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ user, onLogout, onOpenWallet, children }) => {
+    if (!user) return <Navigate to="/" replace />;
+    return <AppLayout user={user} onLogout={onLogout} onOpenWallet={onOpenWallet}>{children}</AppLayout>;
+};
+
+// --- CONTEÚDO PRINCIPAL E ROTAS ---
+const AppContent: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isWalletOpen, setIsWalletOpen] = useState(false);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'blackjack' | 'mines' | 'profile'>('dashboard');
   const [isCheckingSession, setIsCheckingSession] = useState(true);
+  
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  // --- SESSION PERSISTENCE LOGIC ---
+  // --- 1. Verificação de Sessão Inicial (F5) ---
   useEffect(() => {
     const checkSession = async () => {
         const storedId = localStorage.getItem('casino_userId');
         if (storedId) {
             try {
-                // Now sync returns the full user object (thanks to server update)
                 const restoredUser = await DatabaseService.syncUser(storedId);
-                
-                // Data Integrity check similar to login
                 if (restoredUser.vipLevel === undefined) restoredUser.vipLevel = 0;
-                
                 setUser(restoredUser);
-                
-                // If user had an active game, route them there
-                if (restoredUser.activeGame && restoredUser.activeGame.type !== 'NONE') {
-                    if (restoredUser.activeGame.type === 'BLACKJACK') setCurrentView('blackjack');
-                    if (restoredUser.activeGame.type === 'MINES') setCurrentView('mines');
-                }
             } catch (error) {
-                console.warn("Session expired or invalid", error);
-                localStorage.removeItem('casino_userId'); // Clean invalid session
+                console.warn("Session expired", error);
+                localStorage.removeItem('casino_userId');
             }
         }
         setIsCheckingSession(false);
     };
-    
     checkSession();
   }, []);
 
+  // --- 2. Forçar Sincronização ao Sair de Jogos (Navegação SPA) ---
+  useEffect(() => {
+      // Se o usuário estiver logado e navegar para o dashboard ('/'), 
+      // forçamos uma sincronização para ativar o "Auto-Forfeit" do servidor
+      // caso ele tenha saído de um jogo via botão "Voltar" do navegador ou UI.
+      if (user && location.pathname === '/') {
+          const storedId = localStorage.getItem('casino_userId');
+          if (storedId) {
+              // Sincroniza silenciosamente para limpar jogos presos
+              DatabaseService.syncUser(storedId).then(updatedUser => {
+                  if (updatedUser) setUser(updatedUser);
+              }).catch(e => console.error("Auto-Forfeit sync failed", e));
+          }
+      }
+  }, [location.pathname]);
+
   const handleLogin = (userData: User) => {
-    // Ensure VIP Level is not undefined on login
     if (userData.vipLevel === undefined) userData.vipLevel = 0;
-    
-    // SAVE SESSION
     localStorage.setItem('casino_userId', userData.id);
-    
     setUser(userData);
-    setCurrentView('dashboard');
+    navigate('/');
   };
 
   const handleLogout = () => {
     localStorage.removeItem('casino_userId');
     setUser(null);
-    setCurrentView('dashboard');
+    navigate('/');
   };
 
-  const handleGameSelection = (gameId: string) => {
-    if (gameId === 'blackjack') setCurrentView('blackjack');
-    else if (gameId === 'mines') setCurrentView('mines');
+  const handleUpdateUser = (updatedData: Partial<User>) => {
+      if (!user) return;
+      const nextUser = { ...user, ...updatedData };
+      if (updatedData.vipLevel !== undefined) nextUser.vipLevel = updatedData.vipLevel;
+      else nextUser.vipLevel = user.vipLevel || 0;
+      setUser(nextUser as User);
   };
 
   const handleTransaction = async (amount: number, type: 'deposit' | 'withdraw') => {
@@ -171,120 +241,50 @@ const App: React.FC = () => {
     setUser({ ...user, balance: newBalance });
     await DatabaseService.updateBalance(user.id, newBalance);
   };
-  
-  // Robust User Update Callback
-  const handleUpdateUser = (updatedData: Partial<User>) => {
-      if (!user) return;
-      
-      const nextUser = { ...user, ...updatedData };
-      
-      // Data Integrity Guards - Prevent regressions to undefined or 0 if data missing
-      if (updatedData.vipLevel !== undefined) nextUser.vipLevel = updatedData.vipLevel;
-      else nextUser.vipLevel = user.vipLevel || 0;
 
-      if (!nextUser.email && user.email) nextUser.email = user.email;
-      if (!nextUser.cpf && user.cpf) nextUser.cpf = user.cpf;
-      if (!nextUser.birthDate && user.birthDate) nextUser.birthDate = user.birthDate;
-
-      setUser(nextUser as User);
-  };
-
-  // Loading Screen for Session Check
   if (isCheckingSession) {
       return (
           <div className="h-screen w-full bg-slate-950 flex flex-col items-center justify-center text-white">
               <div className="w-16 h-16 border-4 border-casino-gold border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-slate-500 text-xs uppercase tracking-widest font-bold animate-pulse">Recuperando Sessão...</p>
+              <p className="text-slate-500 text-xs uppercase tracking-widest font-bold animate-pulse">Iniciando Sistema...</p>
           </div>
       );
   }
 
-  // Get current avatar configuration for rendering
-  const avatarConfig = user ? getNavbarAvatar(user.avatarId) : null;
-
   return (
-    <div className="h-screen w-full bg-slate-950 text-white font-sans overflow-hidden flex flex-col relative">
-      {user && (
-        <nav className="h-16 flex-none border-b border-white/10 bg-slate-900/80 backdrop-blur-md px-4 flex items-center justify-between sticky top-0 z-40">
-           <div className="flex items-center gap-4">
-             {currentView !== 'dashboard' && (
-                <button 
-                  onClick={() => setCurrentView('dashboard')}
-                  className="bg-slate-800 p-2 rounded-full hover:bg-slate-700 transition-colors"
-                  title="Voltar ao Lobby"
-                >
-                    <ChevronLeft size={20} />
-                </button>
-             )}
-             
-             <div className="flex items-center gap-2 cursor-pointer" onClick={() => setCurrentView('dashboard')}>
-               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-casino-gold to-yellow-600 flex items-center justify-center font-bold text-black shadow-lg shadow-yellow-500/20">
-                 IA
-               </div>
-               <span className="font-bold hidden sm:block">CASSINO IA</span>
-             </div>
-           </div>
+    <>
+        <Routes>
+            <Route path="/" element={!user ? <AuthForm onLogin={handleLogin} /> : <ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><Dashboard /></ProtectedRoute>} />
+            
+            <Route path="/blackjack" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BlackjackGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/mines" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><MinesGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            
+            <Route path="/profile" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><UserProfile user={user!} onUpdateUser={handleUpdateUser} /></ProtectedRoute>} />
+            
+            <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
 
-           <div className="flex items-center gap-4">
-             <BalanceDisplay balance={user.balance} onClick={() => setIsWalletOpen(true)} />
-
-             <button 
-                onClick={() => setCurrentView('profile')}
-                className={`flex items-center gap-2 p-1.5 rounded-lg transition-all group border border-transparent
-                  ${currentView === 'profile' ? 'bg-slate-800 border-white/10' : 'hover:bg-slate-800/50'}
-                `}
-                title="Meu Perfil"
-             >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all bg-gradient-to-br ${avatarConfig?.bg || 'from-slate-700 to-slate-800'} text-white shadow-md border border-white/10`}>
-                    {avatarConfig?.icon}
-                </div>
-                <span className={`text-sm font-medium hidden sm:block transition-colors 
-                  ${currentView === 'profile' ? 'text-white' : 'text-slate-300 group-hover:text-white'}
-                `}>
-                  {user.username}
-                </span>
-             </button>
-             
-             <button 
-               onClick={handleLogout}
-               className="p-2 text-slate-500 hover:text-red-400 transition-colors"
-               title="Sair"
-             >
-               <LogOut size={20} />
-             </button>
-           </div>
-        </nav>
-      )}
-
-      <main className="flex-1 relative w-full overflow-y-auto no-scrollbar flex flex-col z-10">
-        {!user ? (
-          <AuthForm onLogin={handleLogin} />
-        ) : (
-           <>
-            {currentView === 'dashboard' && <Dashboard onSelectGame={handleGameSelection} />}
-            {currentView === 'blackjack' && <BlackjackGame user={user} updateUser={handleUpdateUser} />}
-            {currentView === 'mines' && <MinesGame user={user} updateUser={handleUpdateUser} />}
-            {currentView === 'profile' && <UserProfile user={user} onUpdateUser={handleUpdateUser} />}
-           </>
+        {user && (
+            <WalletModal 
+                isOpen={isWalletOpen} 
+                onClose={() => setIsWalletOpen(false)}
+                currentBalance={user.balance}
+                onTransaction={handleTransaction}
+                isVerified={user.isVerified}
+                onGoToProfile={() => { setIsWalletOpen(false); navigate('/profile'); }}
+            />
         )}
-      </main>
-
-      {user && (
-        <WalletModal 
-          isOpen={isWalletOpen} 
-          onClose={() => setIsWalletOpen(false)}
-          currentBalance={user.balance}
-          onTransaction={handleTransaction}
-          isVerified={user.isVerified}
-          onGoToProfile={() => { setIsWalletOpen(false); setCurrentView('profile'); }}
-        />
-      )}
-      
-      <footer className="flex-none text-center py-2 text-slate-600 text-xs z-10">
-        &copy; 2024 Cassino IA. Jogue com responsabilidade.
-      </footer>
-    </div>
+    </>
   );
+};
+
+// --- APP ROOT ---
+const App: React.FC = () => {
+    return (
+        <Router>
+            <AppContent />
+        </Router>
+    );
 };
 
 export default App;

@@ -41,15 +41,16 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, ba
 const handleResponse = async (response: Response) => {
   const contentType = response.headers.get("content-type");
   
-  // Tenta ler JSON sempre que possível, mesmo em erro 500
+  // Tenta ler JSON sempre que possível, mesmo em erro 400 ou 500
   if (contentType && contentType.includes("application/json")) {
     const data = await response.json();
     if (!response.ok) {
-      // Prioriza a mensagem vinda do servidor (ex: "Serviço indisponível: Erro de Banco de Dados")
+      // Prioriza a mensagem vinda do servidor (ex: "Jogo em andamento")
       throw new Error(data.message || data.details || `Erro do servidor (${response.status})`);
     }
     return data;
   } else {
+    // Fallback para respostas de texto (ex: páginas de erro padrão do proxy/servidor)
     const text = await response.text();
     console.error("Non-JSON Response:", text.substring(0, 100)); 
     
@@ -57,9 +58,9 @@ const handleResponse = async (response: Response) => {
         throw new Error("Serviço de API não encontrado (404).");
     }
     if (response.status >= 500) {
-        throw new Error("O servidor está reiniciando ou com problemas temporários. Tente em 1 minuto.");
+        throw new Error("O servidor está com instabilidade temporária. Tente em 1 minuto.");
     }
-    throw new Error(`Erro de conexão desconhecido (${response.status}).`);
+    throw new Error(`Erro desconhecido (${response.status}).`);
   }
 };
 

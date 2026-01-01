@@ -1,13 +1,12 @@
+
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from './UI/Button';
 import { Spade, Dices, Club, Cat, Bomb, Rocket, Trophy, Gem } from 'lucide-react';
 
-interface DashboardProps {
-  onSelectGame: (gameId: string) => void;
-}
-
 interface GameOption {
   id: string;
+  path: string;
   name: string;
   description: string;
   icon: React.ReactNode;
@@ -16,11 +15,13 @@ interface GameOption {
   badge?: string;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
+export const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
   
   const casinoGames: GameOption[] = [
     {
       id: 'blackjack',
+      path: '/blackjack',
       name: 'Blackjack IA',
       description: 'Clássico 21. Conte com a ajuda da nossa IA para tomar as melhores decisões!',
       icon: <Spade size={40} className="text-casino-gold" />,
@@ -30,6 +31,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
     },
     {
       id: 'baccarat',
+      path: '/baccarat',
       name: 'Baccarat',
       description: 'Clássico Punto Banco. Aposte no Banqueiro, Jogador ou Empate.',
       icon: <Club size={40} className="text-slate-400" />,
@@ -38,6 +40,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
     },
     {
       id: 'roulette',
+      path: '/roulette',
       name: 'Roleta',
       description: 'Aposte na sorte e nos números.',
       icon: <Dices size={40} className="text-slate-400" />,
@@ -49,6 +52,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
   const arcadeGames: GameOption[] = [
     {
       id: 'mines',
+      path: '/mines',
       name: 'Mines IA',
       description: 'Campo minado. Conte com a ajuda da nossa IA para encontrar os campos seguros!',
       icon: <Bomb size={40} className="text-red-500" />,
@@ -57,6 +61,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
     },
     {
       id: 'tigrinho',
+      path: '/tigrinho',
       name: 'Fortune Tiger',
       description: 'O famoso jogo do tigrinho. Multiplicadores insanos esperam por você!',
       icon: <Cat size={40} className="text-orange-500" />,
@@ -65,6 +70,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
     },
     {
       id: 'aviator',
+      path: '/aviator',
       name: 'Aviãozinho',
       description: 'Decole para lucros altos! Retire sua aposta antes que o avião exploda.',
       icon: <Rocket size={40} className="text-purple-500" />,
@@ -73,6 +79,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
       badge: 'CRASH'
     }
   ];
+
+  const handlePlay = (game: GameOption) => {
+      if (game.active) {
+          navigate(game.path);
+      }
+  };
 
   const renderGameCard = (game: GameOption) => (
     <div 
@@ -84,7 +96,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
             : 'opacity-80 hover:opacity-100 border-white/5 cursor-default'}
         ${game.bg}
         `}
-        onClick={() => game.active && onSelectGame(game.id)}
+        onClick={() => handlePlay(game)}
     >
         {game.badge && (
         <div className={`absolute top-0 right-0 text-black text-[10px] font-bold px-2 py-0.5 rounded-bl-lg ${game.active ? 'bg-casino-gold' : 'bg-slate-600 text-slate-300'}`}>
@@ -111,12 +123,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectGame }) => {
                 variant="primary" 
                 size="md"
                 className="shadow-lg shadow-yellow-900/20 py-4"
-                onClick={(e) => { e.stopPropagation(); onSelectGame(game.id); }}
+                onClick={(e) => { e.stopPropagation(); handlePlay(game); }}
             >
                 JOGAR
             </Button>
         ) : (
-            // Botão "Fraco" para itens inativos - Agora mais visível
             <div className="w-full py-4 rounded-lg border border-white/10 bg-slate-800/50 text-slate-400 text-xs font-bold tracking-widest uppercase select-none">
                 Em Breve
             </div>

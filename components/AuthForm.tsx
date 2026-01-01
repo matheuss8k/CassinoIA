@@ -9,7 +9,7 @@ interface AuthFormProps {
   onLogin: (user: User) => void;
 }
 
-const APP_VERSION = 'v2.2.0';
+const APP_VERSION = 'v1.0.4 (Prod Release)';
 
 const FORBIDDEN_USERNAMES = [
   'admin', 'root', 'suporte', 'moderador', 'system', 'sistema', 
@@ -147,7 +147,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onLogin }) => {
         <div className="relative z-10">
           <div className="text-center mb-4">
             <h1 className="text-3xl font-extrabold text-white mb-1 tracking-tight">CASSINO IA</h1>
-            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">Experiência Premium</p>
+            <p className="text-casino-gold uppercase tracking-widest text-[10px] font-semibold">O PRIMEIRO CASSINO DE IA DO MUNDO!</p>
           </div>
 
           <div className="flex p-1 bg-slate-950/50 rounded-lg mb-4">

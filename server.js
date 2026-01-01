@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto'); // Módulo nativo para criptografia
 require('dotenv').config();
 
 const app = express();
@@ -15,8 +16,28 @@ const escapeRegex = (text) => {
     return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 };
 
+// --- SECURITY UTILS (PASSWORD HASHING) ---
+const hashPassword = (password) => {
+    return new Promise((resolve, reject) => {
+        const salt = crypto.randomBytes(16).toString('hex');
+        crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+            if (err) reject(err);
+            resolve(`${salt}:${derivedKey.toString('hex')}`);
+        });
+    });
+};
+
+const verifyPassword = (password, hash) => {
+    return new Promise((resolve, reject) => {
+        const [salt, key] = hash.split(':');
+        crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+            if (err) reject(err);
+            resolve(key === derivedKey.toString('hex'));
+        });
+    });
+};
+
 // --- RATE LIMIT (Produção) ---
-// 300 requisições por minuto = 5 req/segundo (Suficiente para clicar rápido, mas bloqueia scripts de ataque)
 const createRateLimiter = ({ windowMs, max }) => {
     const requests = new Map();
     setInterval(() => {
@@ -27,7 +48,6 @@ const createRateLimiter = ({ windowMs, max }) => {
     }, 60000); 
 
     return (req, res, next) => {
-        // Permitir localhost irrestrito para testes internos
         if (req.ip === '127.0.0.1' || req.ip === '::1') return next();
         
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -54,9 +74,8 @@ app.set('trust proxy', 1);
 app.use(createRateLimiter({ windowMs: 60000, max: 300 }));
 
 // --- CORS ---
-// Em produção, recomenda-se restringir a origin, mas '*' é aceitável se o frontend estiver na mesma origem ou for público.
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization'] }));
-app.use(express.json({ limit: '10kb' })); // Limita payload para evitar DOS
+app.use(express.json({ limit: '10kb' })); 
 
 // --- MONGODB CONNECTION MANAGER ---
 let isConnecting = false;
@@ -76,10 +95,6 @@ const connectDB = async () => {
       isConnecting = false;
       return;
   }
-
-  // Mascara senha para log de segurança
-  const maskedURI = mongoURI.replace(/:([^:@]+)@/, ':****@');
-  console.log(`🔌 Tentando conectar ao MongoDB (AuthSource: admin)...`);
 
   try {
     await mongoose.connect(mongoURI, {
@@ -169,8 +184,6 @@ const generateDailyMissions = () => {
 };
 
 // --- HELPERS DE JOGO ---
-
-// Tabelas de Multiplicadores Padrão (Stake/BC Style) - RTP ~97-99%
 const MINES_MULTIPLIERS = {
     1: [1.01, 1.05, 1.10, 1.15, 1.21, 1.27, 1.34, 1.42, 1.51, 1.60, 1.71, 1.83, 1.97, 2.13, 2.31, 2.52, 2.77, 3.08, 3.46, 3.96, 4.62, 5.54, 6.93, 9.24],
     2: [1.06, 1.13, 1.21, 1.30, 1.40, 1.52, 1.65, 1.81, 1.99, 2.20, 2.45, 2.75, 3.11, 3.56, 4.13, 4.85, 5.82, 7.16, 9.09, 12.01, 16.82, 25.72, 45.01],
@@ -185,7 +198,6 @@ const getMinesMultiplier = (minesCount, revealedCount) => {
         const index = revealedCount - 1;
         if (index < MINES_MULTIPLIERS[minesCount].length) return MINES_MULTIPLIERS[minesCount][index];
     }
-    // Fallback Calculation
     let multiplier = 1.0;
     const houseEdge = 0.97;
     for (let i = 0; i < revealedCount; i++) {
@@ -202,7 +214,6 @@ const handleLoss = (user, currentBet) => {
     const wasStreak = user.consecutiveWins >= 3;
     const isLowBet = user.previousBet > 0 && currentBet < (user.previousBet * 0.5);
     if (wasStreak && isLowBet) {
-        console.log(`🛡️ Anti-Dodge: ${user.username} perdeu aposta baixa. Streak mantido em 3.`);
         user.consecutiveWins = 3; 
     } else {
         user.consecutiveWins = 0; 
@@ -225,17 +236,35 @@ app.post('/api/login', async (req, res) => {
     const safeUser = escapeRegex(username);
     const user = await User.findOne({ $or: [ { username: { $regex: new RegExp(`^${safeUser}$`, 'i') } }, { email: { $regex: new RegExp(`^${safeUser}$`, 'i') } } ] });
 
-    if (user && user.password === password) {
-        user.balance = Number(user.balance) || 0; 
-        if (!user.activeGame) user.activeGame = { type: 'NONE' };
-        if (user.activeGame?.minesGameOver) user.activeGame = { type: 'NONE' };
-        
-        const today = new Date().toISOString().split('T')[0];
-        if (user.lastDailyReset !== today) { user.missions = generateDailyMissions(); user.lastDailyReset = today; user.markModified('missions'); }
-        
-        await user.save();
-        res.json(sanitizeUser(user));
-    } else { res.status(401).json({ message: 'Credenciais inválidas.' }); }
+    if (user) {
+        let isValid = false;
+        if (!user.password.includes(':')) {
+            if (user.password === password) {
+                isValid = true;
+                user.password = await hashPassword(password);
+                await user.save();
+            }
+        } else {
+            isValid = await verifyPassword(password, user.password);
+        }
+
+        if (isValid) {
+            user.balance = Number(user.balance) || 0; 
+            
+            // AUTO-FORFEIT ON LOGIN: Se houve crash ou refresh, o jogo anterior conta como derrota.
+            if (user.activeGame && user.activeGame.type !== 'NONE') {
+                handleLoss(user, user.activeGame.bet);
+                user.activeGame = { type: 'NONE' };
+            }
+            
+            const today = new Date().toISOString().split('T')[0];
+            if (user.lastDailyReset !== today) { user.missions = generateDailyMissions(); user.lastDailyReset = today; user.markModified('missions'); }
+            
+            await user.save();
+            return res.json(sanitizeUser(user));
+        }
+    }
+    res.status(401).json({ message: 'Credenciais inválidas.' });
   } catch (error) { res.status(500).json({ message: 'Erro interno de servidor.' }); }
 });
 
@@ -247,7 +276,9 @@ app.post('/api/register', async (req, res) => {
     const existing = await User.findOne({ $or: [{ username }, { email }, { cpf }] });
     if (existing) return res.status(400).json({ message: 'Usuário, Email ou CPF já cadastrados.' });
     
-    const user = await User.create({ fullName, username, email, cpf, birthDate, password, balance: 0, missions: generateDailyMissions(), lastDailyReset: new Date().toISOString().split('T')[0] });
+    const hashedPassword = await hashPassword(password);
+
+    const user = await User.create({ fullName, username, email, cpf, birthDate, password: hashedPassword, balance: 0, missions: generateDailyMissions(), lastDailyReset: new Date().toISOString().split('T')[0] });
     res.status(201).json(sanitizeUser(user));
   } catch (error) { res.status(500).json({ message: 'Erro ao criar conta.' }); }
 });
@@ -258,8 +289,21 @@ app.post('/api/user/sync', async (req, res) => {
         if (!userId || !mongoose.Types.ObjectId.isValid(userId)) return res.status(400).json({ message: 'ID Inválido' });
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'Usuário não encontrado' });
+        
+        // AUTO-FORFEIT ON REFRESH (Sync): Se o user sincroniza e tem jogo aberto, significa que saiu da página ou deu F5.
+        // O jogo deve ser encerrado como derrota para segurança.
+        if (user.activeGame && user.activeGame.type !== 'NONE') {
+            console.log(`[SEC] Auto-Forfeit acionado para user ${user.username}. Jogo abandonado: ${user.activeGame.type}`);
+            handleLoss(user, user.activeGame.bet);
+            // Saldo já foi descontado no início, então apenas limpamos o jogo sem reembolso.
+            user.activeGame = { type: 'NONE' };
+            user.markModified('activeGame'); // IMPORTANTE: Força o Mongoose a detectar a mudança para objeto vazio/padrão
+            await user.save();
+        }
+
         const today = new Date().toISOString().split('T')[0];
         if (user.lastDailyReset !== today) { user.missions = generateDailyMissions(); user.lastDailyReset = today; user.markModified('missions'); }
+        
         await user.save();
         res.json(sanitizeUser(user));
     } catch (e) { res.status(500).json({ message: 'Erro de sincronização' }); }
@@ -268,8 +312,7 @@ app.post('/api/user/sync', async (req, res) => {
 app.post('/api/balance', async (req, res) => {
     try {
         const { userId, newBalance } = req.body;
-        // Prevent negative balance attack
-        if (newBalance < 0) return res.status(400).json({ message: 'Saldo inválido' });
+        if (typeof newBalance !== 'number' || newBalance < 0) return res.status(400).json({ message: 'Saldo inválido' });
         await User.findByIdAndUpdate(userId, { balance: newBalance });
         res.json({ success: true });
     } catch (e) { res.status(500).json({ message: 'Erro' }); }
@@ -307,10 +350,16 @@ app.post('/api/store/purchase', async (req, res) => {
 app.post('/api/blackjack/deal', async (req, res) => {
     try {
         const { userId, amount } = req.body;
-        const betAmount = Math.abs(amount); // Security: Ensure positive bet
+        const betAmount = Math.abs(Number(amount)); // Validação de segurança
+        if (isNaN(betAmount) || betAmount <= 0) return res.status(400).json({message: 'Aposta inválida'});
+
         const user = await User.findById(userId);
         if(!user) return res.status(404).json({message:'User'});
-        if(user.balance < betAmount) return res.status(400).json({message:'Saldo'});
+        
+        // Bloqueio se já houver jogo
+        if(user.activeGame && user.activeGame.type !== 'NONE') return res.status(400).json({message: 'Jogo em andamento'});
+        
+        if(user.balance < betAmount) return res.status(400).json({message:'Saldo insuficiente'});
         user.balance -= betAmount;
         
         const SUITS = ['♥', '♦', '♣', '♠']; const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -377,9 +426,14 @@ app.post('/api/blackjack/stand', async (req, res) => {
 app.post('/api/mines/start', async (req, res) => {
     try {
         const { userId, amount, minesCount } = req.body;
-        const betAmount = Math.abs(amount); // Security: Ensure positive bet
+        const betAmount = Math.abs(Number(amount));
+        if (isNaN(betAmount) || betAmount <= 0) return res.status(400).json({message: 'Aposta inválida'});
+
         const user = await User.findById(userId);
-        if(!user) return res.status(404).json({message:'User'}); if(user.balance < betAmount) return res.status(400).json({message:'Saldo'});
+        if(!user) return res.status(404).json({message:'User'}); 
+        if(user.activeGame && user.activeGame.type !== 'NONE') return res.status(400).json({message: 'Jogo em andamento'});
+        
+        if(user.balance < betAmount) return res.status(400).json({message:'Saldo insuficiente'});
         user.balance -= betAmount;
         
         const minesSet = new Set(); while(minesSet.size < minesCount) minesSet.add(Math.floor(Math.random()*25));
@@ -395,16 +449,13 @@ app.post('/api/mines/reveal', async (req, res) => {
         const { userId, tileId } = req.body;
         const user = await User.findById(userId);
         
-        // Validation Checks
         if(!user||user.activeGame.type!=='MINES') return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
 
-        // Security: Prevent interacting if game is already over (Race Condition Block)
         if (g.minesGameOver) {
             return res.status(400).json({ message: 'O jogo já terminou.' });
         }
         
-        // Idempotency: Se tile já revelado, retorna estado atual sem erro
         if (g.minesRevealed.includes(tileId)) {
              return res.json({outcome:'GEM', status:'PLAYING', profit:parseFloat((g.bet*g.minesMultiplier).toFixed(2)), multiplier:g.minesMultiplier, newBalance:user.balance});
         }
@@ -417,7 +468,6 @@ app.post('/api/mines/reveal', async (req, res) => {
             rigProbability = (g.bet <= 5) ? Math.max(rigProbability, 0.4) : Math.max(rigProbability, 0.7); 
         } else if (user.consecutiveWins >= 4) {
             rigProbability = 1.0; 
-            console.log(`⛔ STOP WIN ATIVADO: ${user.username} tentou ${user.consecutiveWins + 1}ª vitória.`);
         }
 
         if (user.previousBet > 0 && g.bet >= (user.previousBet * 1.8)) rigProbability = Math.max(rigProbability, 0.4); 
@@ -425,7 +475,6 @@ app.post('/api/mines/reveal', async (req, res) => {
         if (g.bet > 5 && attemptingStep >= 3) {
              const greedRisk = 0.10 + ((attemptingStep - 3) * 0.10);
              rigProbability = Math.max(rigProbability, Math.min(greedRisk, 0.9));
-             if (rigProbability > 0) console.log(`🔥 HIGH BET RISK: ${user.username} (Tile #${attemptingStep}, Risk: ${rigProbability.toFixed(2)})`);
         }
 
         if (Math.random() < rigProbability) {
@@ -468,7 +517,6 @@ app.post('/api/mines/cashout', async (req, res) => {
         if(!user||user.activeGame.type!=='MINES') return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
         
-        // Security: Prevent double cashout
         if (g.minesGameOver) return res.status(400).json({ message: 'Jogo já finalizado' });
 
         const profit = parseFloat((g.bet * g.minesMultiplier).toFixed(2));

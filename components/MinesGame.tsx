@@ -21,7 +21,6 @@ const MAX_BET = 100;
 const MAX_PROFIT = 500;
 const GRID_SIZE = 25;
 
-// Tabelas de Multiplicadores Padrão (Cópia do Server para Preview UI)
 const MINES_MULTIPLIERS: { [key: number]: number[] } = {
     1: [1.01, 1.05, 1.10, 1.15, 1.21, 1.27, 1.34, 1.42, 1.51, 1.60, 1.71, 1.83, 1.97, 2.13, 2.31, 2.52, 2.77, 3.08, 3.46, 3.96, 4.62, 5.54, 6.93, 9.24],
     2: [1.06, 1.13, 1.21, 1.30, 1.40, 1.52, 1.65, 1.81, 1.99, 2.20, 2.45, 2.75, 3.11, 3.56, 4.13, 4.85, 5.82, 7.16, 9.09, 12.01, 16.82, 25.72, 45.01],
@@ -38,7 +37,6 @@ const getMinesMultiplierPreview = (minesCount: number, nextRevealedCount: number
             return MINES_MULTIPLIERS[minesCount][index];
         }
     }
-    // Fallback formula
     let multiplier = 1.0;
     const houseEdge = 0.97;
     for (let i = 0; i < nextRevealedCount; i++) {
@@ -50,6 +48,63 @@ const getMinesMultiplierPreview = (minesCount: number, nextRevealedCount: number
     return parseFloat((multiplier * houseEdge).toFixed(2));
 };
 
+// --- OPTIMIZED SOUND SYNTHESIZER (Singleton Pattern) ---
+let audioCtx: AudioContext | null = null;
+
+const playSynthSound = (type: 'gem' | 'bomb' | 'click' | 'cashout' | 'scan') => {
+    try {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        // Resume context if suspended (browser autoplay policy)
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
+        const ctx = audioCtx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        if (type === 'gem') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(800, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.05, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+            osc.start(); osc.stop(ctx.currentTime + 0.15);
+        } else if (type === 'bomb') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(200, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.5);
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
+            osc.start(); osc.stop(ctx.currentTime + 0.5);
+        } else if (type === 'cashout') {
+             osc.type = 'square';
+             osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+             osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+             osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.2); // G5
+             gain.gain.setValueAtTime(0.05, ctx.currentTime);
+             gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.4);
+             osc.start(); osc.stop(ctx.currentTime + 0.4);
+        } else if (type === 'click') {
+             osc.type = 'triangle';
+             osc.frequency.setValueAtTime(800, ctx.currentTime);
+             gain.gain.setValueAtTime(0.02, ctx.currentTime);
+             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+             osc.start(); osc.stop(ctx.currentTime + 0.05);
+        } else if (type === 'scan') {
+             osc.type = 'sine';
+             osc.frequency.setValueAtTime(1000, ctx.currentTime);
+             osc.frequency.linearRampToValueAtTime(500, ctx.currentTime + 0.2);
+             gain.gain.setValueAtTime(0.02, ctx.currentTime);
+             gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
+             osc.start(); osc.stop(ctx.currentTime + 0.2);
+        }
+    } catch (e) { console.warn('Audio not supported'); }
+};
 
 export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [grid, setGrid] = useState<Tile[]>(Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' })));
@@ -72,11 +127,21 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [lossPopup, setLossPopup] = useState<boolean>(false);
   const [loadingTileId, setLoadingTileId] = useState<number | null>(null);
   const gameOverTimeoutRef = useRef<number | null>(null);
+  
+  const isMounted = useRef(true);
+  const hasRestored = useRef(false);
 
-  // --- RESTORE SESSION LOGIC ---
   useEffect(() => {
-      if (user.activeGame && user.activeGame.type === 'MINES' && status === GameStatus.Idle) {
-          // Restore game state from backend info
+    isMounted.current = true;
+    return () => { isMounted.current = false; };
+  }, []);
+
+  // --- RESTORE SESSION LOGIC (ONLY ON MOUNT) ---
+  useEffect(() => {
+      if (hasRestored.current) return;
+      hasRestored.current = true;
+
+      if (user.activeGame && user.activeGame.type === 'MINES') {
           const savedGame = user.activeGame;
           
           setBet(savedGame.bet);
@@ -84,21 +149,20 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
           setStatus(GameStatus.Playing);
           setCurrentMultiplier(savedGame.minesMultiplier || 1.0);
           
-          // Reconstruct Grid
           const restoredGrid: Tile[] = Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' }));
           
           let revealedCount = 0;
           if (savedGame.minesRevealed) {
               savedGame.minesRevealed.forEach(idx => {
                   restoredGrid[idx].isRevealed = true;
-                  restoredGrid[idx].content = 'gem'; // We only store revealed gems safely
+                  restoredGrid[idx].content = 'gem'; 
                   revealedCount++;
               });
           }
           setGrid(restoredGrid);
           setRevealedCount(revealedCount);
       }
-  }, [user.activeGame]); 
+  }, []); // Run once
 
   useEffect(() => {
     return () => {
@@ -106,12 +170,11 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     };
   }, []);
 
-  // --- POPUP TIMERS ---
   useEffect(() => {
     if (cashoutWin !== null) {
         const timer = setTimeout(() => {
-            setCashoutWin(null);
-        }, 3000); // 3 segundos para sumir
+            if(isMounted.current) setCashoutWin(null);
+        }, 3000);
         return () => clearTimeout(timer);
     }
   }, [cashoutWin]);
@@ -119,28 +182,27 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   useEffect(() => {
     if (lossPopup) {
         const timer = setTimeout(() => {
-            setLossPopup(false);
-        }, 3000); // 3 segundos para sumir
+            if(isMounted.current) setLossPopup(false);
+        }, 3000); 
         return () => clearTimeout(timer);
     }
   }, [lossPopup]);
 
-  // Update Preview
   useEffect(() => {
-      // O próximo multiplicador é para revealedCount + 1
       const nextMult = getMinesMultiplierPreview(mineCount, revealedCount + 1);
       setNextMultiplierPreview(nextMult);
   }, [revealedCount, mineCount]);
 
   const currentWinValue = useMemo(() => {
     if (status !== GameStatus.Playing) return 0;
-    if (profit > 0) return profit; // Use raw profit (no floor)
-    if (revealedCount > 0 && currentMultiplier > 1.0) return bet * currentMultiplier; // Use raw calc (no floor)
+    if (profit > 0) return profit;
+    if (revealedCount > 0 && currentMultiplier > 1.0) return bet * currentMultiplier;
     return 0;
   }, [status, profit, revealedCount, currentMultiplier, bet]);
 
   const playSound = (type: 'gem' | 'bomb' | 'click' | 'cashout' | 'scan') => {
     if (!soundEnabled) return;
+    playSynthSound(type);
   };
 
   const handleAskAi = () => {
@@ -155,7 +217,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
               setAiSuggestion(availableTiles[randomIndex]);
               playSound('scan');
           }
-          setIsAiScanning(false);
+          if(isMounted.current) setIsAiScanning(false);
       }, 700);
   };
 
@@ -172,9 +234,13 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     if (bet > MAX_BET) return alert(`Máximo R$ ${MAX_BET.toFixed(2)}`);
     if (bet > user.balance) return alert("Saldo insuficiente.");
 
-    setIsProcessing(true);
+    setIsProcessing(true); 
     try {
         const response = await DatabaseService.minesStart(user.id, bet, mineCount);
+        
+        if(!isMounted.current) return;
+
+        setStatus(GameStatus.Playing);
         
         updateUser({ 
             balance: response.newBalance,
@@ -184,7 +250,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
         const newGrid = Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' as const }));
         setGrid(newGrid);
         
-        setStatus(GameStatus.Playing);
         setRevealedCount(0);
         setProfit(0);
         setCurrentMultiplier(1.0);
@@ -192,8 +257,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
     } catch (e: any) {
         alert(e.message || "Erro ao iniciar rodada.");
+        setStatus(GameStatus.Idle);
     } finally {
-        setIsProcessing(false);
+        if(isMounted.current) setIsProcessing(false); 
     }
   };
 
@@ -205,6 +271,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
     try {
         const result = await DatabaseService.minesReveal(user.id, index);
+        
+        if(!isMounted.current) return;
 
         const newGrid = [...grid];
         newGrid[index].isRevealed = true;
@@ -213,9 +281,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             newGrid[index].content = 'mine';
             setStatus(GameStatus.GameOver);
             playSound('bomb');
-            setLossPopup(true); // Show Loss Popup
+            setLossPopup(true);
             
-            // Sync on Loss
             if (result.newBalance !== undefined) {
                  updateUser({ 
                     balance: result.newBalance,
@@ -230,7 +297,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                 });
             }
             gameOverTimeoutRef.current = window.setTimeout(() => {
-                setStatus(GameStatus.Idle);
+                if(isMounted.current) setStatus(GameStatus.Idle);
                 gameOverTimeoutRef.current = null;
             }, 3000);
         } else {
@@ -240,7 +307,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             setProfit(result.profit);
             setCurrentMultiplier(result.multiplier);
 
-            // Sync User Data even on Safe Reveal (Server now returns it)
             if (result.newBalance !== undefined) {
                 updateUser({ 
                     balance: result.newBalance,
@@ -249,12 +315,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             }
 
             if (result.status === 'WIN_ALL') {
-                 // Double check Sync on Win All
-                 updateUser({ 
-                    balance: result.newBalance,
-                    loyaltyPoints: result.loyaltyPoints,
-                 });
-                 
                  setStatus(GameStatus.GameOver);
                  playSound('cashout');
                  setCashoutWin(result.profit);
@@ -265,8 +325,10 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     });
                  }
                  gameOverTimeoutRef.current = window.setTimeout(() => {
-                    setStatus(GameStatus.Idle);
-                    setProfit(0);
+                    if(isMounted.current) {
+                        setStatus(GameStatus.Idle);
+                        setProfit(0);
+                    }
                     gameOverTimeoutRef.current = null;
                 }, 4000);
             }
@@ -281,7 +343,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             setGrid(Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' as const })));
         }
     } finally {
-        setLoadingTileId(null);
+        if(isMounted.current) setLoadingTileId(null);
     }
   };
 
@@ -291,13 +353,15 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     try {
         const result = await DatabaseService.minesCashout(user.id);
         
+        if(!isMounted.current) return;
+
         updateUser({ 
             balance: result.newBalance,
             loyaltyPoints: result.loyaltyPoints,
         });
 
         playSound('cashout');
-        const winValue = result.profit || currentWinValue; // No floor
+        const winValue = result.profit || currentWinValue; 
         setCashoutWin(winValue);
         setStatus(GameStatus.Idle);
         setAiSuggestion(null);
@@ -309,14 +373,14 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
              });
              setGrid(finalGrid);
         }
-        setTimeout(() => { setProfit(0); }, 3000);
+        setTimeout(() => { if(isMounted.current) setProfit(0); }, 3000);
     } catch (e: any) {
         if (e.message && (e.message.includes("não encontrado") || e.message.includes("expirado"))) {
              setStatus(GameStatus.Idle);
              setProfit(0);
         }
     } finally {
-        setIsProcessing(false);
+        if(isMounted.current) setIsProcessing(false);
     }
   };
 

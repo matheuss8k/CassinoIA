@@ -8,8 +8,8 @@ interface WalletModalProps {
   onClose: () => void;
   currentBalance: number;
   onTransaction: (amount: number, type: 'deposit' | 'withdraw') => void;
-  isVerified?: boolean; // New prop to check verification status
-  onGoToProfile?: () => void; // Callback to redirect to profile
+  isVerified?: boolean; 
+  onGoToProfile?: () => void; 
 }
 
 export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, currentBalance, onTransaction, isVerified = false, onGoToProfile }) => {
