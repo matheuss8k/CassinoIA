@@ -124,8 +124,9 @@ const userSchema = new mongoose.Schema({
   cpf: { type: String, required: true, unique: true },
   birthDate: { type: String, required: true },
   password: { type: String, required: true }, 
-  balance: { type: Number, default: 0 }, // Alterado para 0
+  balance: { type: Number, default: 0 }, 
   consecutiveWins: { type: Number, default: 0 },
+  previousBet: { type: Number, default: 0 }, // Para rastrear Martingale
   avatarId: { type: String, default: '1' },
   isVerified: { type: Boolean, default: false },
   documentsStatus: { type: String, default: 'NONE' },
@@ -180,7 +181,7 @@ app.post('/api/login', async (req, res) => {
 
     if (user && user.password === password) {
         // Data Integrity Check
-        user.balance = Math.floor(Number(user.balance) || 0); // Alterado fallback para 0
+        user.balance = Math.floor(Number(user.balance) || 0); 
         user.loyaltyPoints = Math.floor(Number(user.loyaltyPoints) || 0);
         if (!user.missions) user.missions = [];
         if (!user.activeGame) user.activeGame = { type: 'NONE' };
@@ -223,7 +224,7 @@ app.post('/api/register', async (req, res) => {
         cpf, 
         birthDate, 
         password, 
-        balance: 0, // Inicia com 0
+        balance: 0, 
         missions: generateDailyMissions(), 
         lastDailyReset: new Date().toISOString().split('T')[0] 
     });
@@ -292,13 +293,28 @@ app.post('/api/blackjack/deal', async (req, res) => {
         if(!user) return res.status(404).json({message:'User'});
         if(user.balance < amount) return res.status(400).json({message:'Saldo'});
         user.balance -= amount;
+        
         const SUITS = ['♥', '♦', '♣', '♠']; const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
         let d=[]; for(let i=0;i<6;i++) for(let s of SUITS) for(let r of RANKS) { let v=parseInt(r); if(['J','Q','K'].includes(r))v=10; if(r==='A')v=11; d.push({rank:r,suit:s,value:v,id:Math.random().toString(36),isHidden:false}); }
         d.sort(()=>Math.random()-0.5);
         const p=[d.pop(),d.pop()], dl=[d.pop(),d.pop()];
         let st='PLAYING', rs='NONE';
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
-        if(calc(p)===21){ st='GAME_OVER'; if(calc(dl)===21){rs='PUSH';user.balance+=amount}else{rs='BLACKJACK';user.balance+=amount*2.5} }
+        
+        if(calc(p)===21){ 
+            st='GAME_OVER'; 
+            if(calc(dl)===21){
+                rs='PUSH';user.balance+=amount;
+                // Empate não zera streak
+            } else {
+                rs='BLACKJACK';user.balance+=amount*2.5;
+                user.consecutiveWins++;
+            } 
+            user.previousBet = amount;
+        } else {
+            // Jogo continua
+        }
+
         user.activeGame = st==='PLAYING' ? {type:'BLACKJACK',bet:amount,bjDeck:d,bjPlayerHand:p,bjDealerHand:dl,bjStatus:st} : {type:'NONE'};
         await user.save();
         res.json({playerHand:p,dealerHand:st==='PLAYING'?[dl[0],{...dl[1],isHidden:true}]:dl,status:st,result:rs,newBalance:user.balance,loyaltyPoints:user.loyaltyPoints});
@@ -315,8 +331,15 @@ app.post('/api/blackjack/hit', async (req, res) => {
         g.bjPlayerHand.push(card);
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         let st='PLAYING', rs='NONE';
-        if(calc(g.bjPlayerHand)>21){ st='GAME_OVER'; rs='BUST'; g.type='NONE'; }
-        else { user.markModified('activeGame'); } 
+        
+        if(calc(g.bjPlayerHand)>21){ 
+            st='GAME_OVER'; rs='BUST'; g.type='NONE'; 
+            user.consecutiveWins = 0; // Perdeu streak
+            user.previousBet = g.bet;
+        } else { 
+            user.markModified('activeGame'); 
+        } 
+        
         if (st === 'GAME_OVER') { g.type = 'NONE'; } else { user.markModified('activeGame'); }
         await user.save();
         res.json({playerHand:g.bjPlayerHand, dealerHand:[g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status:st, result:rs, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
@@ -333,8 +356,19 @@ app.post('/api/blackjack/stand', async (req, res) => {
         while(calc(g.bjDealerHand)<17) g.bjDealerHand.push(g.bjDeck.pop());
         const ps=calc(g.bjPlayerHand), ds=calc(g.bjDealerHand);
         let rs='LOSE';
-        if(ds>21 || ps>ds) { rs='WIN'; user.balance += g.bet*2; }
-        else if(ps===ds) { rs='PUSH'; user.balance += g.bet; }
+        
+        if(ds>21 || ps>ds) { 
+            rs='WIN'; user.balance += g.bet*2; 
+            user.consecutiveWins++;
+        }
+        else if(ps===ds) { 
+            rs='PUSH'; user.balance += g.bet; 
+            // Empate mantem
+        } else {
+            user.consecutiveWins = 0;
+        }
+        
+        user.previousBet = g.bet;
         g.type='NONE';
         await user.save();
         res.json({dealerHand:g.bjDealerHand, status:'GAME_OVER', result:rs, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
@@ -347,7 +381,10 @@ app.post('/api/mines/start', async (req, res) => {
         const user = await User.findById(userId);
         if(!user) return res.status(404).json({message:'User'}); if(user.balance < amount) return res.status(400).json({message:'Saldo'});
         user.balance -= amount;
+        
+        // Gera minas, mas pode ser "rigado" durante o reveal
         const minesSet = new Set(); while(minesSet.size < minesCount) minesSet.add(Math.floor(Math.random()*25));
+        
         user.activeGame = { type:'MINES', bet:amount, minesCount, minesList:Array.from(minesSet), minesRevealed:[], minesMultiplier:1.0, minesGameOver:false };
         await user.save();
         res.json({success:true, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
@@ -360,16 +397,58 @@ app.post('/api/mines/reveal', async (req, res) => {
         const user = await User.findById(userId);
         if(!user||user.activeGame.type!=='MINES') return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
-        if(g.minesList.includes(tileId)) { g.minesGameOver=true; g.type='NONE'; await user.save(); return res.json({outcome:'BOMB',mines:g.minesList,status:'GAME_OVER',newBalance:user.balance}); }
+
+        // --- COOLING SYSTEM / ANTI-MARTINGALE (DISCRETO) ---
+        
+        const isStreak = user.consecutiveWins >= 3;
+        const isMartingale = user.previousBet > 0 && g.bet >= (user.previousBet * 1.8);
+        
+        let shouldRig = false;
+
+        if (isStreak) {
+             // Streak de 3 vitórias = Cooling Ativo (100% de chance de perder para resfriar a conta)
+             shouldRig = true;
+        } else if (isMartingale) {
+             // Anti-Martingale Discreto:
+             // Se dobrou a aposta, tem 40% de chance de "dar azar".
+             // Isso permite que o jogador ganhe algumas vezes no martingale, 
+             // fazendo a derrota parecer natural e não manipulada.
+             shouldRig = Math.random() < 0.4;
+        }
+        
+        // Rig condition: Só ativa se tiver motivo (Streak/Martingale) e aposta > 5
+        if (shouldRig && g.bet >= 5) {
+             // Se o tile clicado NÃO é uma bomba, transformamos em bomba
+             if (!g.minesList.includes(tileId)) {
+                 console.log(`⚠️ RIG ACTIVATED for ${user.username} (Streak: ${isStreak}, Martingale: ${isMartingale})`);
+                 g.minesList.pop(); 
+                 g.minesList.push(tileId);
+                 user.markModified('activeGame');
+             }
+        }
+
+        if(g.minesList.includes(tileId)) { 
+            g.minesGameOver=true; 
+            g.type='NONE'; 
+            user.consecutiveWins = 0; // Reseta streak na derrota
+            user.previousBet = g.bet;
+            await user.save(); 
+            return res.json({outcome:'BOMB',mines:g.minesList,status:'GAME_OVER',newBalance:user.balance}); 
+        }
+        
         if(!g.minesRevealed.includes(tileId)) { g.minesRevealed.push(tileId); g.minesMultiplier *= 1.15; }
         const totalSafe = 25 - g.minesCount;
+        
         if(g.minesRevealed.length >= totalSafe) { // Win All
              const profit = Math.floor(g.bet * g.minesMultiplier);
              user.balance += profit;
+             user.consecutiveWins++; // Venceu
+             user.previousBet = g.bet;
              g.type = 'NONE';
              await user.save();
              return res.json({outcome:'GEM', status:'WIN_ALL', profit, multiplier:g.minesMultiplier, newBalance:user.balance, mines: g.minesList});
         }
+        
         user.markModified('activeGame'); await user.save();
         res.json({outcome:'GEM', status:'PLAYING', profit:Math.floor(g.bet*g.minesMultiplier), multiplier:g.minesMultiplier, newBalance:user.balance});
     } catch(e) { res.status(500).json({message:e.message}); }
@@ -383,6 +462,10 @@ app.post('/api/mines/cashout', async (req, res) => {
         const g = user.activeGame;
         const profit = Math.floor(g.bet * g.minesMultiplier);
         user.balance += profit;
+        
+        user.consecutiveWins++; // Cashout conta como vitória para streak
+        user.previousBet = g.bet;
+        
         const mines = g.minesList; g.type='NONE'; await user.save();
         res.json({success:true, profit, newBalance:user.balance, mines});
     } catch(e) { res.status(500).json({message:e.message}); }
