@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Button } from './UI/Button';
 import { GameStatus } from '../types';
@@ -58,11 +59,11 @@ export const GameControls: React.FC<GameControlsProps> = ({
                 <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent opacity-20 pointer-events-none"></div>
             </div>
 
-            {/* Clear (Compact) */}
+            {/* Clear (Compact) - CORRIGIDO: Cor igual ao Rebet */}
             <button 
                 onClick={() => onBet(0)}
                 disabled={currentBet === 0}
-                className="w-8 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-red-900/70 hover:text-red-500 hover:bg-slate-700 active:scale-95 transition-all disabled:opacity-20"
+                className="w-8 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700 active:scale-95 transition-all disabled:opacity-20"
                 title="Limpar"
             >
                 <Trash2 size={14} />

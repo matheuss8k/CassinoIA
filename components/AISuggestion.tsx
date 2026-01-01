@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { Card, GameStatus } from '../types';
 import { getBasicStrategyHint } from '../services/gameLogic';
@@ -21,8 +22,10 @@ export const AISuggestion: React.FC<AISuggestionProps> = ({ playerHand, dealerHa
   const isHit = suggestion.action === 'HIT';
   const actionText = isHit ? 'PEDIR' : 'PARAR';
   
-  // Só mostra a sugestão ativa se estiver jogando
-  const isActive = status === GameStatus.Playing;
+  // A IA está ativa apenas quando é a vez do jogador
+  const isPlayerTurn = status === GameStatus.Playing;
+  // Verifica se o jogo está acontecendo (Dealing, Playing, DealerTurn)
+  const isGameActive = status === GameStatus.Dealing || status === GameStatus.Playing || status === GameStatus.DealerTurn;
 
   return (
     <div className="w-full animate-slide-up h-full flex flex-col">
@@ -43,7 +46,7 @@ export const AISuggestion: React.FC<AISuggestionProps> = ({ playerHand, dealerHa
 
         {/* Content Area */}
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
-            {isActive ? (
+            {isPlayerTurn ? (
                 <>
                     {/* Action Box */}
                     <div className="relative w-full">
@@ -97,18 +100,24 @@ export const AISuggestion: React.FC<AISuggestionProps> = ({ playerHand, dealerHa
                     </div>
                 </>
             ) : (
-                // Idle State - Mines Style Visuals
+                // Idle State / Processing State
                 <div className="flex flex-col items-center justify-center gap-4 opacity-80">
                     <div className="relative">
-                        <div className="w-24 h-24 rounded-full border-4 border-purple-900/50 bg-purple-900/10 flex items-center justify-center">
-                            <BrainCircuit size={40} className="text-purple-500/50" />
+                        <div className={`w-24 h-24 rounded-full border-4 flex items-center justify-center transition-all ${isGameActive ? 'border-purple-500 border-t-transparent animate-spin bg-purple-900/20' : 'border-purple-900/50 bg-purple-900/10'}`}>
+                            <BrainCircuit size={40} className={`text-purple-500/50 ${isGameActive ? 'animate-pulse' : ''}`} />
                         </div>
-                        <div className="absolute inset-0 border-t-4 border-purple-500 rounded-full animate-spin"></div>
+                        {isGameActive && <div className="absolute inset-0 border-t-4 border-purple-500 rounded-full animate-spin"></div>}
                     </div>
                     
                     <div className="text-center space-y-1">
-                        <h4 className="text-slate-300 font-bold text-sm tracking-wide">AGUARDANDO RODADA</h4>
-                        <p className="text-[10px] text-slate-500 uppercase tracking-widest">Sistema em Standby</p>
+                        <h4 className="text-slate-300 font-bold text-sm tracking-wide">
+                            {status === GameStatus.DealerTurn ? 'VEZ DA BANCA' : 
+                             status === GameStatus.Dealing ? 'DISTRIBUINDO...' : 
+                             status === GameStatus.GameOver ? 'RODADA FINALIZADA' : 'AGUARDANDO RODADA'}
+                        </h4>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-widest">
+                             {isGameActive ? 'Monitorando mesa...' : 'Sistema em Standby'}
+                        </p>
                     </div>
                 </div>
             )}

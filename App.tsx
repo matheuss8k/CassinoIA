@@ -5,7 +5,7 @@ import { User } from './types';
 import { AuthForm } from './components/AuthForm';
 import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
-import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star } from 'lucide-react';
+import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users } from 'lucide-react';
 
 // --- LAZY LOADING ---
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -35,6 +35,60 @@ const getNavbarAvatar = (id: string) => {
         // Default
         default: return { icon: <UserIcon size={16} />, bg: 'from-slate-700 to-slate-800' };
     }
+};
+
+// Componente de Jogadores Online (Falso/Simulado mas Determinístico)
+export const OnlinePlayersCounter = ({ compact = false }: { compact?: boolean }) => {
+    const [count, setCount] = useState<number>(0);
+
+    useEffect(() => {
+        // Algoritmo Determinístico baseado no tempo
+        // Garante que todos os usuários vejam praticamente o mesmo número ao mesmo tempo
+        const calculateOnlineUsers = () => {
+            const now = Date.now();
+            // Onda lenta (Tendência diária/horária)
+            const slowWave = Math.sin(now / 6000000); 
+            // Onda média (Variação de minutos)
+            const mediumWave = Math.cos(now / 200000);
+            // Ruído rápido (Simula conexões/desconexões em tempo real)
+            const fastNoise = Math.sin(now / 5000); 
+
+            // Base: 3850 (Meio de 1200 e 6500)
+            // Amplitude Total aprox: +/- 2650
+            
+            const base = 3850;
+            const variation = (slowWave * 1500) + (mediumWave * 800) + (fastNoise * 50);
+            
+            const val = Math.floor(base + variation);
+            // Clamp para garantir limites
+            const finalVal = Math.max(1200, Math.min(6500, val));
+            
+            setCount(finalVal);
+        };
+
+        calculateOnlineUsers();
+        // Atualiza a cada 15 segundos para parecer orgânico mas estável (Sincronizado com AuthForm)
+        const interval = setInterval(calculateOnlineUsers, 15000);
+        return () => clearInterval(interval);
+    }, []);
+
+    if (count === 0) return null;
+
+    return (
+        <div className={`flex items-center gap-2 ${compact ? 'bg-black/20 px-2 py-1 rounded-md' : 'bg-slate-800/50 px-3 py-1.5 rounded-full border border-white/5'}`}>
+            <div className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </div>
+            <div className="flex flex-col leading-none">
+                <span className={`font-mono font-bold tabular-nums text-green-400 ${compact ? 'text-xs' : 'text-sm'}`}>
+                    {count.toLocaleString('pt-BR')}
+                </span>
+                {!compact && <span className="text-[8px] text-slate-500 uppercase font-bold tracking-wider">Online</span>}
+            </div>
+            {!compact && <Users size={12} className="text-slate-500 ml-1" />}
+        </div>
+    );
 };
 
 // Componente de Saldo com efeito Count-Up
@@ -131,6 +185,10 @@ const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, chi
                     </Link>
                 </div>
                 <div className="flex items-center gap-4">
+                    <div className="hidden md:block">
+                        <OnlinePlayersCounter />
+                    </div>
+                    
                     <BalanceDisplay balance={user.balance} onClick={onOpenWallet} />
                     
                     <Link to="/profile" className={`flex items-center gap-2 p-1.5 rounded-lg transition-all group border border-transparent ${location.pathname === '/profile' ? 'bg-slate-800 border-white/10' : 'hover:bg-slate-800/50'}`} title="Meu Perfil">

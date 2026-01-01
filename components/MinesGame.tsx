@@ -416,8 +416,11 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             </div>
         )}
 
-        <div className="flex flex-col-reverse xl:flex-row items-start justify-center gap-6 w-full max-w-[1400px] z-10">
-            <div className="w-full max-w-md xl:w-[320px] bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-3xl p-5 flex flex-col gap-5 shadow-2xl shrink-0 h-auto xl:h-[600px] transition-all mx-auto xl:mx-0">
+        {/* CONTAINER PRINCIPAL: MAX-W-1600 e ITEMS-CENTER (IGUAL BLACKJACK) */}
+        <div className="flex flex-col-reverse xl:flex-row items-center justify-center gap-4 xl:gap-8 w-full max-w-[1600px] z-10">
+            
+            {/* PAINEL ESQUERDO (APOSTAS): 320px no Desktop (RESTAURADO TAMANHO ORIGINAL) */}
+            <div className="w-full max-w-md xl:w-[320px] h-[600px] bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-3xl p-6 flex flex-col gap-6 shadow-2xl shrink-0 transition-all mx-auto xl:mx-0">
                 <div className="flex items-center justify-between pb-2 border-b border-white/5">
                     <div className="flex items-center gap-2">
                         <div className="w-8 h-8 rounded bg-red-500/20 flex items-center justify-center text-red-500"><Bomb size={18} /></div>
@@ -466,6 +469,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                 </div>
             </div>
 
+            {/* CENTRO (GRID DO JOGO) */}
             <div className="flex-1 w-full max-w-[600px] aspect-square flex flex-col relative bg-slate-900/50 rounded-3xl border border-white/10 p-4 md:p-8 overflow-hidden backdrop-blur-sm shadow-[0_0_50px_rgba(0,0,0,0.5)] mx-auto xl:mx-0">
                 <div className="grid grid-cols-3 items-center mb-4 px-2 bg-slate-950/50 p-2 rounded-xl border border-white/5">
                      <div className="flex items-center gap-3 justify-self-start">
@@ -529,9 +533,10 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                 )}
             </div>
 
-            <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0 h-[600px]">
+            {/* PAINEL DIREITO (IA): 280px no Desktop (IGUAL BLACKJACK) */}
+            <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0">
                  <div className="w-full animate-slide-up h-full flex flex-col">
-                    <div className="bg-slate-900/90 border border-purple-500/30 rounded-3xl p-6 backdrop-blur-xl shadow-[0_0_30px_rgba(168,85,247,0.1)] relative overflow-hidden group flex-1 flex flex-col">
+                    <div className="bg-slate-900/90 border border-purple-500/30 rounded-3xl p-6 backdrop-blur-xl shadow-[0_0_30px_rgba(168,85,247,0.1)] relative overflow-hidden group flex-1 flex flex-col min-h-[500px]">
                         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-purple-500/5 to-transparent -translate-y-full group-hover:animate-[scan_2s_ease-in-out_infinite] pointer-events-none"></div>
                         <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
                             <h3 className="text-purple-400 font-bold flex items-center gap-2 uppercase tracking-widest text-sm animate-pulse"><BrainCircuit size={20} /> IA SCAN</h3>

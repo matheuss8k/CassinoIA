@@ -9,6 +9,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const MAX_BET_LIMIT = 100; // Limite global de segurança do servidor
 
 // --- UTILS ---
 const escapeRegex = (text) => {
@@ -16,7 +17,7 @@ const escapeRegex = (text) => {
     return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 };
 
-// --- SECURITY UTILS (PASSWORD HASHING) ---
+// --- SECURITY UTILS ---
 const hashPassword = (password) => {
     return new Promise((resolve, reject) => {
         const salt = crypto.randomBytes(16).toString('hex');
@@ -71,9 +72,17 @@ const createRateLimiter = ({ windowMs, max }) => {
 };
 
 app.set('trust proxy', 1);
-app.use(createRateLimiter({ windowMs: 60000, max: 300 }));
 
-// --- CORS ---
+// --- MIDDLEWARES DE SEGURANÇA ---
+app.use((req, res, next) => {
+    // Security Headers Manuais (Hardening)
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+});
+
+app.use(createRateLimiter({ windowMs: 60000, max: 300 }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10kb' })); 
 
@@ -296,7 +305,6 @@ app.post('/api/user/sync', async (req, res) => {
         
         // AUTO-FORFEIT ON REFRESH (Sync)
         if (user.activeGame && user.activeGame.type !== 'NONE') {
-            // [LOG REMOVIDO: Jogo Abandonado]
             handleLoss(user, user.activeGame.bet);
             user.activeGame = { type: 'NONE' };
             user.markModified('activeGame'); 
@@ -352,30 +360,32 @@ app.post('/api/user/verify', async (req, res) => {
 app.post('/api/store/purchase', async (req, res) => {
     try {
         const { userId, itemId, cost } = req.body;
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).json({message: 'User not found'});
-        if (user.loyaltyPoints < cost) return res.status(400).json({message: 'Pontos insuficientes'});
-        user.loyaltyPoints -= cost;
-        if (!user.ownedItems.includes(itemId)) user.ownedItems.push(itemId);
-        await user.save();
+        // Uso de findOneAndUpdate para transação atômica simples (prevenir race condition de saldo)
+        const user = await User.findOneAndUpdate(
+            { _id: userId, loyaltyPoints: { $gte: cost } },
+            { 
+                $inc: { loyaltyPoints: -cost },
+                $addToSet: { ownedItems: itemId }
+            },
+            { new: true }
+        );
+
+        if (!user) return res.status(400).json({message: 'Pontos insuficientes ou erro.'});
+        
         res.json({ success: true, newPoints: user.loyaltyPoints, ownedItems: user.ownedItems });
     } catch (e) { res.status(500).json({ message: 'Erro' }); }
 });
+
+// --- ATOMIC GAME TRANSACTIONS ---
 
 app.post('/api/blackjack/deal', async (req, res) => {
     try {
         const { userId, amount } = req.body;
         const betAmount = Math.abs(Number(amount)); 
         if (isNaN(betAmount) || betAmount <= 0) return res.status(400).json({message: 'Aposta inválida'});
+        if (betAmount > MAX_BET_LIMIT) return res.status(400).json({message: 'Limite de aposta excedido'});
 
-        const user = await User.findById(userId);
-        if(!user) return res.status(404).json({message:'User'});
-        
-        if(user.activeGame && user.activeGame.type !== 'NONE') return res.status(400).json({message: 'Jogo em andamento'});
-        
-        if(user.balance < betAmount) return res.status(400).json({message:'Saldo insuficiente'});
-        user.balance -= betAmount;
-        
+        // Lógica do Deck em Memória
         const SUITS = ['♥', '♦', '♣', '♠']; const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
         let d=[]; for(let i=0;i<6;i++) for(let s of SUITS) for(let r of RANKS) { let v=parseInt(r); if(['J','Q','K'].includes(r))v=10; if(r==='A')v=11; d.push({rank:r,suit:s,value:v,id:Math.random().toString(36),isHidden:false}); }
         d.sort(()=>Math.random()-0.5);
@@ -383,17 +393,44 @@ app.post('/api/blackjack/deal', async (req, res) => {
         let st='PLAYING', rs='NONE';
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         
-        if(calc(p)===21){ 
+        let payout = 0;
+        let pScore = calc(p);
+        let dScore = calc(dl);
+        
+        // Immediate Blackjack Check
+        if(pScore===21){ 
             st='GAME_OVER'; 
-            if(calc(dl)===21){ rs='PUSH';user.balance+=betAmount; user.previousBet = betAmount; } 
-            else { rs='BLACKJACK';user.balance+=betAmount*2.5; handleWin(user, betAmount); } 
-        } else {
-             // Check if user lost (Dealer Blackjack would be checked here if we revealed immediately, but we don't in US style until later or EU style)
-             // Simplified: Dealer only checks if visible is Ace/10. For now assuming normal flow.
+            if(dScore===21){ rs='PUSH'; payout = betAmount; } // Devolve aposta
+            else { rs='BLACKJACK'; payout = betAmount * 2.5; } // Paga 3:2
         }
 
-        user.activeGame = st==='PLAYING' ? {type:'BLACKJACK',bet:betAmount,bjDeck:d,bjPlayerHand:p,bjDealerHand:dl,bjStatus:st} : {type:'NONE'};
-        await user.save();
+        const newActiveGame = st==='PLAYING' ? 
+            { type:'BLACKJACK', bet:betAmount, bjDeck:d, bjPlayerHand:p, bjDealerHand:dl, bjStatus:st } : 
+            { type:'NONE' };
+
+        // ATOMIC LOCK: Só processa se o jogo atual for NONE e tiver saldo.
+        // O saldo é debitado Atomicamente ($inc).
+        const user = await User.findOneAndUpdate(
+            { _id: userId, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
+            { 
+                $inc: { balance: -betAmount },
+                $set: { activeGame: newActiveGame }
+            },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(400).json({message: 'Jogo em andamento ou saldo insuficiente.'});
+        }
+
+        // Se houve payout imediato (Blackjack), credita de volta atomicamente
+        if (payout > 0) {
+             user.balance += payout;
+             if(rs === 'BLACKJACK') handleWin(user, betAmount);
+             else user.previousBet = betAmount;
+             await user.save();
+        }
+
         res.json({playerHand:p,dealerHand:st==='PLAYING'?[dl[0],{...dl[1],isHidden:true}]:dl,status:st,result:rs,newBalance:user.balance,loyaltyPoints:user.loyaltyPoints});
     } catch(e) { res.status(500).json({message:e.message}); }
 });
@@ -401,8 +438,11 @@ app.post('/api/blackjack/deal', async (req, res) => {
 app.post('/api/blackjack/hit', async (req, res) => {
     try {
         const { userId } = req.body;
-        const user = await User.findById(userId);
-        if(!user || user.activeGame.type !== 'BLACKJACK') return res.status(400).json({message:'Jogo inválido'});
+        // Busca com Lock para garantir que é Blackjack
+        const user = await User.findOne({ _id: userId, 'activeGame.type': 'BLACKJACK' });
+        
+        if(!user) return res.status(400).json({message:'Jogo inválido ou finalizado'});
+        
         const g = user.activeGame;
         const card = g.bjDeck.pop();
         g.bjPlayerHand.push(card);
@@ -425,8 +465,8 @@ app.post('/api/blackjack/hit', async (req, res) => {
 app.post('/api/blackjack/stand', async (req, res) => {
     try {
         const { userId } = req.body;
-        const user = await User.findById(userId);
-        if(!user || user.activeGame.type !== 'BLACKJACK') return res.status(400).json({message:'Jogo inválido'});
+        const user = await User.findOne({ _id: userId, 'activeGame.type': 'BLACKJACK' });
+        if(!user) return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         while(calc(g.bjDealerHand)<17) g.bjDealerHand.push(g.bjDeck.pop());
@@ -453,18 +493,24 @@ app.post('/api/mines/start', async (req, res) => {
         const { userId, amount, minesCount } = req.body;
         const betAmount = Math.abs(Number(amount));
         if (isNaN(betAmount) || betAmount <= 0) return res.status(400).json({message: 'Aposta inválida'});
+        if (betAmount > MAX_BET_LIMIT) return res.status(400).json({message: 'Limite de aposta excedido'});
 
-        const user = await User.findById(userId);
-        if(!user) return res.status(404).json({message:'User'}); 
-        if(user.activeGame && user.activeGame.type !== 'NONE') return res.status(400).json({message: 'Jogo em andamento'});
-        
-        if(user.balance < betAmount) return res.status(400).json({message:'Saldo insuficiente'});
-        user.balance -= betAmount;
-        
         const minesSet = new Set(); while(minesSet.size < minesCount) minesSet.add(Math.floor(Math.random()*25));
         
-        user.activeGame = { type:'MINES', bet:betAmount, minesCount, minesList:Array.from(minesSet), minesRevealed:[], minesMultiplier:1.0, minesGameOver:false };
-        await user.save();
+        const newGame = { type:'MINES', bet:betAmount, minesCount, minesList:Array.from(minesSet), minesRevealed:[], minesMultiplier:1.0, minesGameOver:false };
+
+        // ATOMIC LOCK: Inicia jogo apenas se NONE e desconta saldo.
+        const user = await User.findOneAndUpdate(
+            { _id: userId, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
+            { 
+                $inc: { balance: -betAmount },
+                $set: { activeGame: newGame }
+            },
+            { new: true }
+        );
+        
+        if(!user) return res.status(400).json({message: 'Jogo em andamento ou saldo insuficiente.'});
+
         res.json({success:true, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
     } catch(e) { res.status(500).json({message:e.message}); }
 });
@@ -490,14 +536,23 @@ app.post('/api/mines/reveal', async (req, res) => {
         let isRigged = false;
         const attemptingStep = g.minesRevealed.length + 1;
 
+        // Anti-Farming Logic (Low Risk / Low Bet Grinding)
+        if (g.minesCount <= 3) {
+            if (user.consecutiveWins >= 2) rigProbability = Math.max(rigProbability, 0.3);
+            if (user.consecutiveWins >= 5) rigProbability = Math.max(rigProbability, 0.8);
+            if (attemptingStep >= 4) rigProbability += 0.25;
+        }
+
+        // Lógica Padrão de Streak (High Bet)
         if (user.consecutiveWins === 3) {
             rigProbability = (g.bet <= 5) ? Math.max(rigProbability, 0.4) : Math.max(rigProbability, 0.7); 
         } else if (user.consecutiveWins >= 4) {
-            rigProbability = 1.0; 
+            rigProbability = Math.max(rigProbability, 1.0);
         }
 
         if (user.previousBet > 0 && g.bet >= (user.previousBet * 1.8)) rigProbability = Math.max(rigProbability, 0.4); 
 
+        // Risco de Ganância Geral
         if (g.bet > 5 && attemptingStep >= 3) {
              const greedRisk = 0.10 + ((attemptingStep - 3) * 0.10);
              rigProbability = Math.max(rigProbability, Math.min(greedRisk, 0.9));
@@ -516,9 +571,8 @@ app.post('/api/mines/reveal', async (req, res) => {
             g.type='NONE'; 
             handleLoss(user, g.bet); 
 
-            // LOG DE PERDA ALTA (MINES)
             if (g.bet > 20) {
-                 const cause = isRigged ? '[TRAVA DE SEGURANÇA/COOLING ATIVADA]' : '[Sorte]';
+                 const cause = isRigged ? '[TRAVA DE SEGURANÇA/ANTI-FARM]' : '[Sorte]';
                  console.log(`[ALERT] 📉 HIGH LOSS (Mines): ${user.username} perdeu R$ ${g.bet.toFixed(2)}. Causa: ${cause}`);
             }
 
