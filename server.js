@@ -261,6 +261,10 @@ app.post('/api/login', async (req, res) => {
             if (user.lastDailyReset !== today) { user.missions = generateDailyMissions(); user.lastDailyReset = today; user.markModified('missions'); }
             
             await user.save();
+            
+            // LOG LOGIN
+            console.log(`[LOGIN] 🟢 User: ${user.username} (ID: ${user.id}) logged in.`);
+
             return res.json(sanitizeUser(user));
         }
     }
@@ -290,14 +294,12 @@ app.post('/api/user/sync', async (req, res) => {
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'Usuário não encontrado' });
         
-        // AUTO-FORFEIT ON REFRESH (Sync): Se o user sincroniza e tem jogo aberto, significa que saiu da página ou deu F5.
-        // O jogo deve ser encerrado como derrota para segurança.
+        // AUTO-FORFEIT ON REFRESH (Sync)
         if (user.activeGame && user.activeGame.type !== 'NONE') {
-            console.log(`[SEC] Auto-Forfeit acionado para user ${user.username}. Jogo abandonado: ${user.activeGame.type}`);
+            // [LOG REMOVIDO: Jogo Abandonado]
             handleLoss(user, user.activeGame.bet);
-            // Saldo já foi descontado no início, então apenas limpamos o jogo sem reembolso.
             user.activeGame = { type: 'NONE' };
-            user.markModified('activeGame'); // IMPORTANTE: Força o Mongoose a detectar a mudança para objeto vazio/padrão
+            user.markModified('activeGame'); 
             await user.save();
         }
 
@@ -313,7 +315,20 @@ app.post('/api/balance', async (req, res) => {
     try {
         const { userId, newBalance } = req.body;
         if (typeof newBalance !== 'number' || newBalance < 0) return res.status(400).json({ message: 'Saldo inválido' });
-        await User.findByIdAndUpdate(userId, { balance: newBalance });
+        
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const diff = newBalance - user.balance;
+
+        if (diff > 0) {
+            console.log(`[ALERT] 💰 DEPÓSITO: ${user.username} adicionou R$ ${diff.toFixed(2)}`);
+        } else if (diff < 0) {
+            console.log(`[ALERT] 💸 SOLICITAÇÃO DE SAQUE: ${user.username} solicitou R$ ${Math.abs(diff).toFixed(2)}`);
+        }
+
+        user.balance = newBalance;
+        await user.save();
         res.json({ success: true });
     } catch (e) { res.status(500).json({ message: 'Erro' }); }
 });
@@ -350,13 +365,12 @@ app.post('/api/store/purchase', async (req, res) => {
 app.post('/api/blackjack/deal', async (req, res) => {
     try {
         const { userId, amount } = req.body;
-        const betAmount = Math.abs(Number(amount)); // Validação de segurança
+        const betAmount = Math.abs(Number(amount)); 
         if (isNaN(betAmount) || betAmount <= 0) return res.status(400).json({message: 'Aposta inválida'});
 
         const user = await User.findById(userId);
         if(!user) return res.status(404).json({message:'User'});
         
-        // Bloqueio se já houver jogo
         if(user.activeGame && user.activeGame.type !== 'NONE') return res.status(400).json({message: 'Jogo em andamento'});
         
         if(user.balance < betAmount) return res.status(400).json({message:'Saldo insuficiente'});
@@ -373,6 +387,9 @@ app.post('/api/blackjack/deal', async (req, res) => {
             st='GAME_OVER'; 
             if(calc(dl)===21){ rs='PUSH';user.balance+=betAmount; user.previousBet = betAmount; } 
             else { rs='BLACKJACK';user.balance+=betAmount*2.5; handleWin(user, betAmount); } 
+        } else {
+             // Check if user lost (Dealer Blackjack would be checked here if we revealed immediately, but we don't in US style until later or EU style)
+             // Simplified: Dealer only checks if visible is Ace/10. For now assuming normal flow.
         }
 
         user.activeGame = st==='PLAYING' ? {type:'BLACKJACK',bet:betAmount,bjDeck:d,bjPlayerHand:p,bjDealerHand:dl,bjStatus:st} : {type:'NONE'};
@@ -394,6 +411,9 @@ app.post('/api/blackjack/hit', async (req, res) => {
         
         if(calc(g.bjPlayerHand)>21){ 
             st='GAME_OVER'; rs='BUST'; g.type='NONE'; handleLoss(user, g.bet);
+            if (g.bet > 20) {
+                console.log(`[ALERT] 📉 HIGH LOSS (Blackjack BUST): ${user.username} perdeu R$ ${g.bet.toFixed(2)}.`);
+            }
         } else { user.markModified('activeGame'); } 
         
         if (st === 'GAME_OVER') { g.type = 'NONE'; } else { user.markModified('activeGame'); }
@@ -415,7 +435,12 @@ app.post('/api/blackjack/stand', async (req, res) => {
         
         if(ds>21 || ps>ds) { rs='WIN'; user.balance += g.bet*2; handleWin(user, g.bet); }
         else if(ps===ds) { rs='PUSH'; user.balance += g.bet; user.previousBet = g.bet; } 
-        else { handleLoss(user, g.bet); }
+        else { 
+            handleLoss(user, g.bet); 
+            if (g.bet > 20) {
+                 console.log(`[ALERT] 📉 HIGH LOSS (Blackjack DEALER WIN): ${user.username} perdeu R$ ${g.bet.toFixed(2)}.`);
+            }
+        }
         
         g.type='NONE';
         await user.save();
@@ -462,6 +487,7 @@ app.post('/api/mines/reveal', async (req, res) => {
 
         // --- RIG LOGIC ---
         let rigProbability = 0;
+        let isRigged = false;
         const attemptingStep = g.minesRevealed.length + 1;
 
         if (user.consecutiveWins === 3) {
@@ -479,7 +505,9 @@ app.post('/api/mines/reveal', async (req, res) => {
 
         if (Math.random() < rigProbability) {
              if (!g.minesList.includes(tileId)) {
-                 g.minesList.pop(); g.minesList.push(tileId); user.markModified('activeGame');
+                 g.minesList.pop(); g.minesList.push(tileId); 
+                 user.markModified('activeGame');
+                 isRigged = true;
              }
         }
 
@@ -487,6 +515,13 @@ app.post('/api/mines/reveal', async (req, res) => {
             g.minesGameOver=true; 
             g.type='NONE'; 
             handleLoss(user, g.bet); 
+
+            // LOG DE PERDA ALTA (MINES)
+            if (g.bet > 20) {
+                 const cause = isRigged ? '[TRAVA DE SEGURANÇA/COOLING ATIVADA]' : '[Sorte]';
+                 console.log(`[ALERT] 📉 HIGH LOSS (Mines): ${user.username} perdeu R$ ${g.bet.toFixed(2)}. Causa: ${cause}`);
+            }
+
             await user.save(); 
             return res.json({outcome:'BOMB',mines:g.minesList,status:'GAME_OVER',newBalance:user.balance}); 
         }
