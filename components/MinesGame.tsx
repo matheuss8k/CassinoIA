@@ -344,7 +344,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
                 <div className="mt-auto pt-4 border-t border-white/5">
                     {status === GameStatus.Idle || status === GameStatus.GameOver ? (
-                        <Button fullWidth size="lg" variant="primary" onClick={startGame} disabled={isProcessing} className="h-16 text-xl shadow-[0_0_20px_rgba(251,191,36,0.2)] rounded-xl">{isProcessing ? 'INICIANDO...' : 'JOGAR'}</Button>
+                        <Button fullWidth size="lg" variant="primary" onClick={startGame} disabled={isProcessing || cashoutWin !== null} className="h-16 text-xl shadow-[0_0_20px_rgba(251,191,36,0.2)] rounded-xl">{isProcessing ? 'INICIANDO...' : 'JOGAR'}</Button>
                     ) : (
                         <div className="space-y-3">
                              <div className="bg-slate-950/80 border border-green-500/30 p-3 rounded-xl flex items-center justify-between"><span className="text-xs text-slate-400 uppercase tracking-wider">Lucro Atual</span><span className="text-green-400 font-mono font-bold text-lg">R$ {currentWinValue.toFixed(2)}</span></div>
@@ -395,13 +395,14 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                 )}
 
                 {cashoutWin !== null && (
-                    <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
-                         <div className="relative">
+                    <div onClick={() => setCashoutWin(null)} className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem] cursor-pointer">
+                         <div className="relative pointer-events-none">
                             <div className="absolute inset-0 bg-green-500 blur-[30px] opacity-10 rounded-full animate-pulse"></div>
                             <div className="bg-slate-900/95 border-2 border-green-500 p-6 rounded-2xl shadow-[0_0_30px_rgba(34,197,94,0.3)] flex flex-col items-center gap-3 transform scale-100 animate-slide-up relative z-10 min-w-[250px]">
                                 <div className="p-3 bg-green-500/20 rounded-full mb-1 ring-2 ring-green-500/10"><Trophy size={32} className="text-green-400 drop-shadow-[0_0_10px_rgba(34,197,94,0.8)]" /></div>
                                 <div className="text-center"><p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-1">Você Sacou</p><p className="text-3xl md:text-4xl font-black text-white tracking-tight drop-shadow-lg">R$ <span className="text-transparent bg-clip-text bg-gradient-to-br from-green-400 to-emerald-600">{cashoutWin.toFixed(2)}</span></p></div>
                                 <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden"><div className="h-full bg-green-500 animate-[shine_2s_infinite]"></div></div>
+                                <p className="text-[9px] text-slate-500 mt-2 uppercase tracking-wide">Toque para continuar</p>
                             </div>
                          </div>
                     </div>
