@@ -160,6 +160,28 @@ const generateDailyMissions = () => {
     return pool.sort(() => 0.5 - Math.random()).slice(0, 3).map(m => ({ ...m, current: 0, completed: false }));
 };
 
+// --- HELPERS DE JOGO ---
+const handleLoss = (user, currentBet) => {
+    // Anti-Dodge Logic:
+    // Se o usuário tem streak alto (3+) e aposta pouco (< 50% da anterior)
+    // Ele está tentando "queimar" a derrota. Não resetamos o streak.
+    const wasStreak = user.consecutiveWins >= 3;
+    const isLowBet = user.previousBet > 0 && currentBet < (user.previousBet * 0.5);
+
+    if (wasStreak && isLowBet) {
+        console.log(`🛡️ Anti-Dodge: ${user.username} perdeu aposta baixa. Streak mantido em 3.`);
+        user.consecutiveWins = 3; // Mantém na zona de perigo
+    } else {
+        user.consecutiveWins = 0; // Reset normal
+    }
+    user.previousBet = currentBet;
+};
+
+const handleWin = (user, currentBet) => {
+    user.consecutiveWins++;
+    user.previousBet = currentBet;
+};
+
 // --- ROTAS API ---
 
 app.post('/api/login', async (req, res) => {
@@ -235,7 +257,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// As rotas de jogos usam os models definidos acima
 app.post('/api/user/sync', async (req, res) => {
     try {
         const { userId } = req.body;
@@ -305,14 +326,15 @@ app.post('/api/blackjack/deal', async (req, res) => {
             st='GAME_OVER'; 
             if(calc(dl)===21){
                 rs='PUSH';user.balance+=amount;
-                // Empate não zera streak
+                user.previousBet = amount;
             } else {
                 rs='BLACKJACK';user.balance+=amount*2.5;
-                user.consecutiveWins++;
+                handleWin(user, amount);
             } 
-            user.previousBet = amount;
         } else {
-            // Jogo continua
+            // Se Dealer tiver Blackjack imediato (e player não)
+            // Em implementações reais o dealer checa o BJ se tiver Ás ou 10.
+            // Para simplificar, vamos manter o jogo rodando.
         }
 
         user.activeGame = st==='PLAYING' ? {type:'BLACKJACK',bet:amount,bjDeck:d,bjPlayerHand:p,bjDealerHand:dl,bjStatus:st} : {type:'NONE'};
@@ -334,8 +356,7 @@ app.post('/api/blackjack/hit', async (req, res) => {
         
         if(calc(g.bjPlayerHand)>21){ 
             st='GAME_OVER'; rs='BUST'; g.type='NONE'; 
-            user.consecutiveWins = 0; // Perdeu streak
-            user.previousBet = g.bet;
+            handleLoss(user, g.bet);
         } else { 
             user.markModified('activeGame'); 
         } 
@@ -359,16 +380,15 @@ app.post('/api/blackjack/stand', async (req, res) => {
         
         if(ds>21 || ps>ds) { 
             rs='WIN'; user.balance += g.bet*2; 
-            user.consecutiveWins++;
+            handleWin(user, g.bet);
         }
         else if(ps===ds) { 
             rs='PUSH'; user.balance += g.bet; 
-            // Empate mantem
+            user.previousBet = g.bet; // Empate mantém status
         } else {
-            user.consecutiveWins = 0;
+            handleLoss(user, g.bet);
         }
         
-        user.previousBet = g.bet;
         g.type='NONE';
         await user.save();
         res.json({dealerHand:g.bjDealerHand, status:'GAME_OVER', result:rs, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
@@ -382,7 +402,6 @@ app.post('/api/mines/start', async (req, res) => {
         if(!user) return res.status(404).json({message:'User'}); if(user.balance < amount) return res.status(400).json({message:'Saldo'});
         user.balance -= amount;
         
-        // Gera minas, mas pode ser "rigado" durante o reveal
         const minesSet = new Set(); while(minesSet.size < minesCount) minesSet.add(Math.floor(Math.random()*25));
         
         user.activeGame = { type:'MINES', bet:amount, minesCount, minesList:Array.from(minesSet), minesRevealed:[], minesMultiplier:1.0, minesGameOver:false };
@@ -398,7 +417,7 @@ app.post('/api/mines/reveal', async (req, res) => {
         if(!user||user.activeGame.type!=='MINES') return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
 
-        // --- COOLING SYSTEM / ANTI-MARTINGALE (DISCRETO) ---
+        // --- COOLING SYSTEM / ANTI-MARTINGALE (PROBABILISTICO + ANTI-DODGE) ---
         
         const isStreak = user.consecutiveWins >= 3;
         const isMartingale = user.previousBet > 0 && g.bet >= (user.previousBet * 1.8);
@@ -411,14 +430,13 @@ app.post('/api/mines/reveal', async (req, res) => {
         } else if (isMartingale) {
              // Anti-Martingale Discreto:
              // Se dobrou a aposta, tem 40% de chance de "dar azar".
-             // Isso permite que o jogador ganhe algumas vezes no martingale, 
-             // fazendo a derrota parecer natural e não manipulada.
              shouldRig = Math.random() < 0.4;
         }
         
-        // Rig condition: Só ativa se tiver motivo (Streak/Martingale) e aposta > 5
+        // Rig condition: Só ativa se tiver motivo (Streak/Martingale) e aposta >= 5
+        // (Nota: Se for um Anti-Dodge, ele pode cair na armadilha mesmo sendo aposta baixa,
+        //  mas aqui estamos apenas definindo SE vai ter mina. O Anti-Dodge é tratado no handleLoss).
         if (shouldRig && g.bet >= 5) {
-             // Se o tile clicado NÃO é uma bomba, transformamos em bomba
              if (!g.minesList.includes(tileId)) {
                  console.log(`⚠️ RIG ACTIVATED for ${user.username} (Streak: ${isStreak}, Martingale: ${isMartingale})`);
                  g.minesList.pop(); 
@@ -430,8 +448,7 @@ app.post('/api/mines/reveal', async (req, res) => {
         if(g.minesList.includes(tileId)) { 
             g.minesGameOver=true; 
             g.type='NONE'; 
-            user.consecutiveWins = 0; // Reseta streak na derrota
-            user.previousBet = g.bet;
+            handleLoss(user, g.bet); // Aplica Anti-Dodge
             await user.save(); 
             return res.json({outcome:'BOMB',mines:g.minesList,status:'GAME_OVER',newBalance:user.balance}); 
         }
@@ -442,8 +459,7 @@ app.post('/api/mines/reveal', async (req, res) => {
         if(g.minesRevealed.length >= totalSafe) { // Win All
              const profit = Math.floor(g.bet * g.minesMultiplier);
              user.balance += profit;
-             user.consecutiveWins++; // Venceu
-             user.previousBet = g.bet;
+             handleWin(user, g.bet);
              g.type = 'NONE';
              await user.save();
              return res.json({outcome:'GEM', status:'WIN_ALL', profit, multiplier:g.minesMultiplier, newBalance:user.balance, mines: g.minesList});
@@ -463,8 +479,7 @@ app.post('/api/mines/cashout', async (req, res) => {
         const profit = Math.floor(g.bet * g.minesMultiplier);
         user.balance += profit;
         
-        user.consecutiveWins++; // Cashout conta como vitória para streak
-        user.previousBet = g.bet;
+        handleWin(user, g.bet); // Cashout conta como vitória
         
         const mines = g.minesList; g.type='NONE'; await user.save();
         res.json({success:true, profit, newBalance:user.balance, mines});
