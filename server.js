@@ -78,7 +78,7 @@ const connectDB = async () => {
     
     // Diagnóstico específico para erro de senha
     if (error.code === 8000 || error.name === 'MongoServerError') {
-        console.error(`⚠️ ALERTA DE AUTENTICAÇÃO: Verifique se a senha no Render contém caracteres especiais não codificados ou se está incorreta.`);
+        console.error(`⚠️ ALERTA DE AUTENTICAÇÃO: Verifique a senha nas variáveis de ambiente.`);
     }
 
     console.error(`🔄 Tentando novamente em 5 segundos...`);
@@ -124,7 +124,7 @@ const userSchema = new mongoose.Schema({
   cpf: { type: String, required: true, unique: true },
   birthDate: { type: String, required: true },
   password: { type: String, required: true }, 
-  balance: { type: Number, default: 1000 },
+  balance: { type: Number, default: 0 }, // Alterado para 0
   consecutiveWins: { type: Number, default: 0 },
   avatarId: { type: String, default: '1' },
   isVerified: { type: Boolean, default: false },
@@ -167,7 +167,7 @@ app.post('/api/login', async (req, res) => {
     
     if (mongoose.connection.readyState !== 1) {
         connectDB(); 
-        return res.status(503).json({ message: 'Sistema inicializando. Tente novamente em 10 segundos.' });
+        return res.status(503).json({ message: 'Sistema inicializando. Tente novamente em 5 segundos.' });
     }
 
     const safeUser = escapeRegex(username);
@@ -180,7 +180,7 @@ app.post('/api/login', async (req, res) => {
 
     if (user && user.password === password) {
         // Data Integrity Check
-        user.balance = Math.floor(Number(user.balance) || 1000);
+        user.balance = Math.floor(Number(user.balance) || 0); // Alterado fallback para 0
         user.loyaltyPoints = Math.floor(Number(user.loyaltyPoints) || 0);
         if (!user.missions) user.missions = [];
         if (!user.activeGame) user.activeGame = { type: 'NONE' };
@@ -216,7 +216,17 @@ app.post('/api/register', async (req, res) => {
     const existing = await User.findOne({ $or: [{ username }, { email }, { cpf }] });
     if (existing) return res.status(400).json({ message: 'Usuário, Email ou CPF já cadastrados.' });
     
-    const user = await User.create({ fullName, username, email, cpf, birthDate, password, balance: 1000, missions: generateDailyMissions(), lastDailyReset: new Date().toISOString().split('T')[0] });
+    const user = await User.create({ 
+        fullName, 
+        username, 
+        email, 
+        cpf, 
+        birthDate, 
+        password, 
+        balance: 0, // Inicia com 0
+        missions: generateDailyMissions(), 
+        lastDailyReset: new Date().toISOString().split('T')[0] 
+    });
     res.status(201).json(sanitizeUser(user));
   } catch (error) { 
       console.error("REGISTER ERROR:", error);
@@ -396,7 +406,7 @@ if (fs.existsSync(distPath)) {
 }
 
 const startServer = async () => {
-  await connectDB(); // Tenta conexão inicial
+  await connectDB();
   app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
 };
 startServer();
