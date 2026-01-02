@@ -12,7 +12,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 50; 
-const VERSION = 'v1.3.0'; 
+const VERSION = 'v1.3.1'; // Balance Patch: Increased House Edge
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -518,7 +518,7 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (r
 
         if (!user) return res.status(400).json({ message: 'Erro de aposta' });
 
-        // RIGGING LOGIC (Expanded)
+        // RIGGING LOGIC (Expanded & Proactive)
         let isRigged = false;
         let riskReason = "";
         let deckModified = false;
@@ -544,16 +544,26 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (r
                  logEvent('SYSTEM', `🎯 SNIPER DETECTED: ${user.username} (Sudden High Bet)`);
              }
         }
+        
+        // 4. PROACTIVE HOUSE EDGE (15% Chance on DEAL)
+        // This ensures the house wins more often over time, regardless of streaks
+        if (!isRigged && secureRandomFloat() < 0.15) {
+            isRigged = true;
+            riskReason = "HOUSE_EDGE";
+            // logEvent('SYSTEM', `🎲 HOUSE EDGE BIAS applied for ${user.username}`);
+        }
 
         // Apply Rigging
         if (isRigged) {
             user.activeGame.riskLevel = 'HIGH'; // Persist risk for HIT actions
-            // Force Dealer Strong Start
-            if (currentDealerHand[0].value < 10 && currentDealerHand[0].rank !== 'A') {
-                 const tenIdx = currentDeck.findIndex(c => c.value === 10);
+            // Force Dealer Strong Start (Strong Hole Card)
+            // Dealer Hand: [Visible, Hidden]
+            // We want Hidden to be 10 or 11
+            if (currentDealerHand[1].value < 10) {
+                 const tenIdx = currentDeck.findIndex(c => c.value >= 10);
                  if (tenIdx !== -1) {
-                     const temp = currentDealerHand[0];
-                     currentDealerHand[0] = currentDeck[tenIdx];
+                     const temp = currentDealerHand[1];
+                     currentDealerHand[1] = currentDeck[tenIdx];
                      currentDeck[tenIdx] = temp;
                      deckModified = true;
                  }
@@ -625,14 +635,21 @@ app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (re
         
         // Dynamic Risk adjustment
         if (!isRigged && user.consecutiveWins >= 3 && currentScore >= 12) isRigged = true;
+        
+        // "Bad Luck" for Stiff Hands (12-16)
+        if (!isRigged && currentScore >= 12 && currentScore <= 16 && secureRandomFloat() < 0.20) {
+             isRigged = true;
+        }
 
         if (isRigged) {
              const pointsNeededToBust = 22 - currentScore;
+             // Look for a bust card
              const bustCardIdx = g.bjDeck.findIndex(c => c.value >= pointsNeededToBust);
              if (bustCardIdx !== -1) {
+                 // Move bust card to top (end of array)
                  const bustCard = g.bjDeck.splice(bustCardIdx, 1)[0];
                  g.bjDeck.push(bustCard);
-                 logEvent('GAME', `🃏 FORCED BUST: ${user.username} (Rigging Logic)`);
+                 // logEvent('GAME', `🃏 FORCED BUST: ${user.username}`);
              }
         }
 
@@ -663,25 +680,27 @@ app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (
         let isRigged = g.riskLevel === 'HIGH'; // Carry over
 
         while(ds < 17) {
-            if (isRigged) {
-                 const minVal = (ps - ds) + 1;
-                 const maxVal = 21 - ds;
-                 let targetCardIdx = -1;
-                 // Try to beat player
-                 if (maxVal >= minVal) targetCardIdx = g.bjDeck.findIndex(c => c.value >= minVal && c.value <= maxVal);
-                 // If can't beat without bust, try small card to get closer
-                 if (targetCardIdx === -1) targetCardIdx = g.bjDeck.findIndex(c => c.value <= maxVal);
-                 
-                 if (targetCardIdx !== -1) {
-                     const riggedCard = g.bjDeck.splice(targetCardIdx, 1)[0];
-                     g.bjDeck.push(riggedCard); // Put at bottom, use pop next
-                     // Correct logic: we need to put it at TOP (end of array) for pop()
-                     // But wait, secureShuffle makes array. pop() takes from end.
-                     // So we pushed to end. Correct.
-                     logEvent('GAME', `🃏 DEALER BUFF: ${user.username} (Ensuring Win/Push)`);
-                 }
+            let nextCard = g.bjDeck.pop();
+            
+            // "SECOND CHANCE" LOGIC FOR DEALER
+            // If the dealer is about to Bust (score > 21) AND player has a beatable score (<= 20)
+            // Give dealer a 25% chance to discard that bust card and try again for a low card.
+            if ((ds + nextCard.value) > 21 && ps <= 20) {
+                if (isRigged || secureRandomFloat() < 0.25) {
+                    // Try to find a non-bust card
+                    const needed = 21 - ds;
+                    const safeIdx = g.bjDeck.findIndex(c => c.value <= needed);
+                    if (safeIdx !== -1) {
+                        // Put the bust card back at bottom (start)
+                        g.bjDeck.unshift(nextCard); 
+                        // Take the safe card
+                        nextCard = g.bjDeck.splice(safeIdx, 1)[0];
+                        // logEvent('GAME', `🃏 DEALER SAVE: ${user.username} (Avoided Bust)`);
+                    }
+                }
             }
-            g.bjDealerHand.push(g.bjDeck.pop());
+
+            g.bjDealerHand.push(nextCard);
             ds = calc(g.bjDealerHand);
         }
         
