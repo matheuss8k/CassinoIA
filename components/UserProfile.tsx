@@ -144,7 +144,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
   };
 
   return (
-    <div className="w-full h-full overflow-y-auto no-scrollbar p-4 md:p-8 animate-slide-up pb-20 relative">
+    <div className="w-full h-full overflow-y-auto no-scrollbar p-4 md:p-8 animate-slide-up pb-0 relative">
       {/* AVATAR MODAL */}
       {isAvatarModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-fade-in">
@@ -258,6 +258,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
                      <section><div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-2"><ShoppingBag size={16} className="text-blue-400"/><h4 className="text-sm font-bold text-white uppercase tracking-wider">Itens & Consumíveis</h4></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{STORE_ITEMS.filter(i => !i.id.startsWith('avatar_')).map(item => { const isOwned = user.ownedItems?.includes(item.id); return (<div key={item.id} className={`bg-slate-900 border rounded-2xl p-4 flex items-center justify-between group transition-all ${isOwned ? 'border-green-500/30' : 'border-white/10 hover:border-casino-gold/30'}`}><div className="flex items-center gap-4"><div className="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center text-2xl border border-white/5 relative">{item.type === 'cosmetic' ? '🎨' : '🧪'}{isOwned && <div className="absolute -top-1 -right-1 bg-green-500 text-black rounded-full p-0.5"><Check size={10} strokeWidth={4}/></div>}</div><div><h4 className={`font-bold transition-colors ${isOwned ? 'text-green-400' : 'text-white group-hover:text-casino-gold'}`}>{item.name}</h4><p className="text-xs text-slate-400">{item.description}</p></div></div><div className="text-right"><p className="text-lg font-bold text-yellow-500 flex items-center justify-end gap-1"><Coins size={14}/> {item.cost}</p><button onClick={() => handlePurchase(item)} disabled={isOwned && item.type === 'cosmetic'} className={`mt-1 text-xs px-3 py-1.5 rounded-lg font-bold transition-colors ${isOwned && item.type === 'cosmetic' ? 'bg-green-500/20 text-green-400 cursor-default' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isOwned && item.type === 'cosmetic' ? 'ADQUIRIDO' : 'COMPRAR'}</button></div></div>); })}</div></section>
                 </div>
             )}
+        </div>
+        
+        {/* Footer Injected Here */}
+        <div className="w-full text-center py-8 text-slate-600 text-[10px] uppercase tracking-widest font-bold opacity-50 select-none">
+            &copy; 2024 Cassino IA. Jogue com responsabilidade.
         </div>
       </div>
     </div>

@@ -392,7 +392,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   };
 
   return (
-    <div className="w-full min-h-[calc(100vh-80px)] flex flex-col items-center justify-center p-4 relative animate-fade-in pt-16 md:pt-20">
+    <div className="w-full min-h-[calc(100vh-80px)] flex flex-col items-center justify-center p-4 relative animate-fade-in pt-16 md:pt-20 pb-0">
         <div className="absolute top-5 md:top-8 left-0 right-0 text-center z-20 pointer-events-none">
              <h1 className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]">
                 MINES <span className="text-casino-gold">IA</span>
@@ -559,6 +559,11 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     </div>
                  </div>
             </div>
+        </div>
+        
+        {/* Footer Injected Here */}
+        <div className="w-full text-center py-8 text-slate-600 text-[10px] uppercase tracking-widest font-bold opacity-50 select-none">
+            &copy; 2024 Cassino IA. Jogue com responsabilidade.
         </div>
     </div>
   );

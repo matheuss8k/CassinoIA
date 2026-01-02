@@ -186,6 +186,15 @@ export const DatabaseService = {
       });
       return handleResponse(response);
   },
+
+  tigerSpin: async (userId: string, amount: number) => {
+      const response = await fetchWithRetry(`${API_URL}/tiger/spin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, amount }),
+      });
+      return handleResponse(response);
+  },
   
   purchaseItem: async (userId: string, itemId: string, cost: number) => {
       const response = await fetchWithRetry(`${API_URL}/store/purchase`, {

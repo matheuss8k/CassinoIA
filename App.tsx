@@ -11,6 +11,7 @@ import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
 const BlackjackGame = lazy(() => import('./components/BlackjackGame').then(module => ({ default: module.BlackjackGame })));
 const MinesGame = lazy(() => import('./components/MinesGame').then(module => ({ default: module.MinesGame })));
+const TigerGame = lazy(() => import('./components/TigerGame').then(module => ({ default: module.TigerGame })));
 const UserProfile = lazy(() => import('./components/UserProfile').then(module => ({ default: module.UserProfile })));
 
 // --- CONFIGURAÇÃO DE AVATAR (Navbar) ---
@@ -211,7 +212,6 @@ const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, chi
                     {children}
                 </Suspense>
             </main>
-            <footer className="flex-none text-center py-2 text-slate-600 text-xs z-10 select-none">&copy; 2024 Cassino IA. Jogue com responsabilidade.</footer>
         </div>
     );
 };
@@ -316,6 +316,7 @@ const AppContent: React.FC = () => {
             
             <Route path="/blackjack" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BlackjackGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             <Route path="/mines" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><MinesGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/tigrinho" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><TigerGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             
             <Route path="/profile" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><UserProfile user={user!} onUpdateUser={handleUpdateUser} /></ProtectedRoute>} />
             
