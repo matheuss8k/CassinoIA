@@ -195,6 +195,10 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     if (bet < MIN_BET || bet > user.balance) return;
 
     setIsProcessing(true); 
+    
+    // --- OPTIMISTIC UI: DEDUCT BET IMMEDIATELY ---
+    const currentBalance = user.balance;
+    updateUser({ balance: currentBalance - bet });
 
     try {
         const data = await DatabaseService.blackjackDeal(user.id, bet);
@@ -207,6 +211,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         
         setIsProcessing(false); 
 
+        // Sync authoritative balance from server
         updateUser({ 
             balance: data.newBalance,
             loyaltyPoints: data.loyaltyPoints,
@@ -249,6 +254,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         
     } catch (error) {
         console.error("Deal error:", error);
+        // ROLLBACK BALANCE ON ERROR
+        updateUser({ balance: currentBalance });
         alert("Erro ao conectar com o servidor.");
         setIsProcessing(false);
         setStatus(GameStatus.Idle);

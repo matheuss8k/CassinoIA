@@ -1,34 +1,63 @@
 
 import { User } from '../types';
 
-// --- CONFIGURAÇÃO DA API ---
-
 const GET_BASE_URL = () => {
     const hostname = window.location.hostname;
     const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
-    
-    if (!isLocalhost) {
-        return '/api';
-    }
-
+    if (!isLocalhost) return '/api';
     const envUrl = (import.meta as any).env?.VITE_API_URL;
     if (envUrl) return envUrl;
-    
     return '/api';
 };
 
 const API_URL = GET_BASE_URL();
 
-// --- RETRY LOGIC (Para Cold Starts do Render) ---
+// Armazenamento do token em memória (Segurança contra XSS)
+let _accessToken: string | null = null;
+
+// --- RETRY LOGIC WITH REFRESH TOKEN ---
 const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, backoff = 1000): Promise<Response> => {
+    // Anexa o token se existir
+    if (_accessToken) {
+        options.headers = {
+            ...options.headers,
+            'Authorization': `Bearer ${_accessToken}`
+        };
+    }
+
     try {
-        const response = await fetch(url, options);
+        let response = await fetch(url, options);
+
+        // Se receber 403 (Forbidden), o token pode ter expirado. Tenta Refresh.
+        if (response.status === 403) {
+            try {
+                const refreshResponse = await fetch(`${API_URL}/refresh`, { method: 'POST' });
+                if (refreshResponse.ok) {
+                    const data = await refreshResponse.json();
+                    _accessToken = data.accessToken;
+                    
+                    // Tenta a requisição original novamente com o novo token
+                    options.headers = { ...options.headers, 'Authorization': `Bearer ${_accessToken}` };
+                    response = await fetch(url, options);
+                } else {
+                    // Se o refresh falhar, o usuário precisa relogar
+                    _accessToken = null;
+                    throw new Error("Sessão expirada. Faça login novamente.");
+                }
+            } catch (e) {
+                // Falha no refresh
+                throw e;
+            }
+        }
+
         if (response.status >= 502 && response.status <= 504 && retries > 0) {
              console.log(`Servidor acordando... (${retries} retries left)`);
              throw new Error("Server warming up");
         }
         return response;
     } catch (error: any) {
+        if (error.message.includes("Sessão expirada")) throw error;
+        
         if (retries > 0) {
             await new Promise(resolve => setTimeout(resolve, backoff));
             return fetchWithRetry(url, options, retries - 1, backoff * 2);
@@ -37,35 +66,44 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, ba
     }
 };
 
-// Helper Robusto para tratar respostas
 const handleResponse = async (response: Response) => {
   const contentType = response.headers.get("content-type");
-  
-  // Tenta ler JSON sempre que possível, mesmo em erro 400 ou 500
   if (contentType && contentType.includes("application/json")) {
     const data = await response.json();
-    if (!response.ok) {
-      // Prioriza a mensagem vinda do servidor (ex: "Jogo em andamento")
-      throw new Error(data.message || data.details || `Erro do servidor (${response.status})`);
-    }
+    if (!response.ok) throw new Error(data.message || data.details || `Erro (${response.status})`);
     return data;
   } else {
-    // Fallback para respostas de texto (ex: páginas de erro padrão do proxy/servidor)
     const text = await response.text();
-    console.error("Non-JSON Response:", text.substring(0, 100)); 
-    
-    if (response.status === 404) {
-        throw new Error("Serviço de API não encontrado (404).");
-    }
-    if (response.status >= 500) {
-        throw new Error("O servidor está com instabilidade temporária. Tente em 1 minuto.");
-    }
+    if (response.status === 404) throw new Error("Serviço de API não encontrado.");
+    if (response.status >= 500) throw new Error("Instabilidade temporária. Tente em 1 min.");
     throw new Error(`Erro desconhecido (${response.status}).`);
   }
 };
 
 export const DatabaseService = {
-  // Create a new user via API
+  // NOVO: Restaura sessão usando Cookie HttpOnly antes de chamar APIs protegidas
+  restoreSession: async (): Promise<User> => {
+      try {
+          // 1. Tenta obter um novo Access Token via Cookie HttpOnly
+          const refreshResponse = await fetch(`${API_URL}/refresh`, { method: 'POST' });
+          if (!refreshResponse.ok) throw new Error("Sessão inválida ou expirada");
+          
+          const data = await refreshResponse.json();
+          _accessToken = data.accessToken; // Salva na memória
+
+          // 2. Com o token em mão, sincroniza os dados do usuário
+          const syncResponse = await fetchWithRetry(`${API_URL}/user/sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({}), // Body vazio, ID vem do token
+          });
+          return handleResponse(syncResponse);
+      } catch (e) {
+          _accessToken = null;
+          throw e;
+      }
+  },
+
   createUser: async (userData: Partial<User>): Promise<User> => {
     try {
         const response = await fetchWithRetry(`${API_URL}/register`, {
@@ -73,14 +111,12 @@ export const DatabaseService = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(userData),
         });
-        return handleResponse(response);
-    } catch (error: any) {
-        console.error("Register Error:", error);
-        throw error;
-    }
+        const data = await handleResponse(response);
+        if (data.accessToken) _accessToken = data.accessToken;
+        return data;
+    } catch (error) { throw error; }
   },
 
-  // Authenticate user via API
   login: async (username: string, password: string): Promise<User> => {
     try {
         const response = await fetchWithRetry(`${API_URL}/login`, {
@@ -88,15 +124,22 @@ export const DatabaseService = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
         });
-        return handleResponse(response);
-    } catch (error: any) {
-        console.error("Login Error:", error);
-        throw error;
-    }
+        const data = await handleResponse(response);
+        if (data.accessToken) _accessToken = data.accessToken;
+        return data;
+    } catch (error) { throw error; }
   },
   
-  // SYNC USER DATA
+  logout: async () => {
+      try {
+          await fetch(`${API_URL}/logout`, { method: 'POST' });
+          _accessToken = null;
+      } catch(e) {}
+  },
+  
   syncUser: async (userId: string) => {
+      // Nota: userId ainda é enviado no body por compatibilidade de tipo,
+      // mas o backend agora usa o token para identificar o usuário (Segurança).
       const response = await fetchWithRetry(`${API_URL}/user/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -112,7 +155,7 @@ export const DatabaseService = {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, newBalance }),
         });
-    } catch (e) { console.error('Network error syncing balance', e); }
+    } catch (e) { console.error('Sync error', e); }
   },
 
   updateAvatar: async (userId: string, avatarId: string): Promise<{success: boolean, avatarId: string}> => {

@@ -340,6 +340,10 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
         setWinAmount(0);
         setIsFullScreenWin(false);
         playSound('spin_start');
+        
+        // --- OPTIMISTIC UI: DEDUCT BET IMMEDIATELY ---
+        const currentBalance = user.balance;
+        updateUser({ balance: currentBalance - bet });
 
         try {
             const minSpinTime = 1800;
@@ -356,6 +360,8 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
 
             stopSpinSound();
             setGrid(response.grid);
+            
+            // Sync with server authoritative balance
             updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
 
             playSound('stop');
@@ -374,6 +380,8 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
                 }, 300);
             }
         } catch (e: any) {
+            // ROLLBACK BALANCE ON ERROR
+            updateUser({ balance: currentBalance });
             stopSpinSound();
             alert(e.message || "Erro no giro.");
         } finally {

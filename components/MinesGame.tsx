@@ -235,6 +235,11 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     if (bet > user.balance) return alert("Saldo insuficiente.");
 
     setIsProcessing(true); 
+    
+    // --- OPTIMISTIC UI: DEDUCT BET IMMEDIATELY ---
+    const currentBalance = user.balance;
+    updateUser({ balance: currentBalance - bet });
+
     try {
         const response = await DatabaseService.minesStart(user.id, bet, mineCount);
         
@@ -242,6 +247,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
         setStatus(GameStatus.Playing);
         
+        // Sync with authoritative balance
         updateUser({ 
             balance: response.newBalance,
             loyaltyPoints: response.loyaltyPoints,
@@ -256,6 +262,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
         playSound('click');
 
     } catch (e: any) {
+        // ROLLBACK BALANCE ON ERROR
+        updateUser({ balance: currentBalance });
         alert(e.message || "Erro ao iniciar rodada.");
         setStatus(GameStatus.Idle);
     } finally {

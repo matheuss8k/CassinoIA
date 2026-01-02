@@ -240,18 +240,23 @@ const AppContent: React.FC = () => {
   // --- 1. Verificação de Sessão Inicial (F5) ---
   useEffect(() => {
     const checkSession = async () => {
-        const storedId = localStorage.getItem('casino_userId');
-        if (storedId) {
-            try {
-                const restoredUser = await DatabaseService.syncUser(storedId);
-                if (restoredUser.vipLevel === undefined) restoredUser.vipLevel = 0;
-                setUser(restoredUser);
-            } catch (error) {
-                console.warn("Session expired", error);
-                localStorage.removeItem('casino_userId');
-            }
+        // CORREÇÃO: Tenta restaurar sessão sempre, independente do localStorage.
+        // O Cookie HttpOnly é a fonte de verdade. LocalStorage pode ter sido limpo.
+        try {
+            const restoredUser = await DatabaseService.restoreSession();
+            
+            if (restoredUser.vipLevel === undefined) restoredUser.vipLevel = 0;
+            setUser(restoredUser);
+            
+            // Sincroniza LocalStorage para manter consistência futura
+            if (restoredUser.id) localStorage.setItem('casino_userId', restoredUser.id);
+        } catch (error) {
+            console.warn("Session restore failed", error);
+            // Se falhou, limpa qualquer resquício local
+            localStorage.removeItem('casino_userId');
+        } finally {
+            setIsCheckingSession(false);
         }
-        setIsCheckingSession(false);
     };
     checkSession();
   }, []);
@@ -262,10 +267,11 @@ const AppContent: React.FC = () => {
       // forçamos uma sincronização para ativar o "Auto-Forfeit" do servidor
       // caso ele tenha saído de um jogo via botão "Voltar" do navegador ou UI.
       if (user && location.pathname === '/') {
-          const storedId = localStorage.getItem('casino_userId');
-          if (storedId) {
-              // Sincroniza silenciosamente para limpar jogos presos
-              DatabaseService.syncUser(storedId).then(updatedUser => {
+          // Apenas sincroniza se o usuário já estiver autenticado (user não é null)
+          // syncUser usa o token da memória, não precisamos de restoreSession aqui
+          // pois o usuário já está navegando
+          if (user.id) {
+              DatabaseService.syncUser(user.id).then(updatedUser => {
                   if (updatedUser) setUser(updatedUser);
               }).catch(e => console.error("Auto-Forfeit sync failed", e));
           }
@@ -280,6 +286,7 @@ const AppContent: React.FC = () => {
   };
 
   const handleLogout = () => {
+    DatabaseService.logout(); // Limpa cookie e token
     localStorage.removeItem('casino_userId');
     setUser(null);
     navigate('/');
