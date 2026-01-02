@@ -5,7 +5,7 @@ import { User } from './types';
 import { AuthForm } from './components/AuthForm';
 import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
-import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users } from 'lucide-react';
+import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users, PieChart } from 'lucide-react';
 
 // --- LAZY LOADING ---
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));

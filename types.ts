@@ -73,6 +73,9 @@ export interface User {
   consecutiveWins: number;
   password?: string;
   
+  // New: Session tracking
+  sessionProfit: number; // Positive = Profit, Negative = Loss
+  
   // Profile
   avatarId: string;
   isVerified: boolean;

