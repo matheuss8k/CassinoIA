@@ -1,7 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from './UI/Button';
-import { X, ArrowDownCircle, ArrowUpCircle, DollarSign, Lock, AlertTriangle, ExternalLink } from 'lucide-react';
+import { X, ArrowDownCircle, ArrowUpCircle, DollarSign, Lock, AlertTriangle, ExternalLink, AlertCircle } from 'lucide-react';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -15,15 +15,27 @@ interface WalletModalProps {
 export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, currentBalance, onTransaction, isVerified = false, onGoToProfile }) => {
   const [amount, setAmount] = useState<string>('');
   const [mode, setMode] = useState<'deposit' | 'withdraw'>('deposit');
+  const [error, setError] = useState<string | null>(null);
+
+  // Limpar erro ao abrir ou mudar modo
+  useEffect(() => {
+      setError(null);
+      setAmount('');
+  }, [isOpen, mode]);
 
   if (!isOpen) return null;
 
   const handleTransaction = () => {
+    setError(null);
     const val = parseFloat(amount);
-    if (!val || val <= 0) return;
+    
+    if (!val || val <= 0) {
+        setError("Digite um valor válido.");
+        return;
+    }
     
     if (mode === 'withdraw' && val > currentBalance) {
-      alert("Saldo insuficiente!");
+      setError("Saldo insuficiente para saque.");
       return;
     }
 
@@ -66,6 +78,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, curre
           </button>
         </div>
 
+        {/* Error Message Inline */}
+        {error && (
+            <div className="mb-4 bg-red-500/10 border border-red-500/50 rounded-lg p-3 flex items-center gap-3 text-red-200 text-sm animate-shake">
+                <AlertCircle size={18} className="text-red-500 shrink-0" />
+                <span className="font-bold">{error}</span>
+            </div>
+        )}
+
         {/* Withdrawal Lock Screen */}
         {mode === 'withdraw' && !isVerified ? (
             <div className="bg-red-900/10 border border-red-500/20 rounded-xl p-6 text-center flex flex-col items-center gap-3">
@@ -95,7 +115,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, curre
                 <input 
                 type="number"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => { setAmount(e.target.value); setError(null); }}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-casino-gold"
                 placeholder="0.00"
                 />
@@ -105,7 +125,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, curre
                 {[50, 100, 200, 500].map(val => (
                 <button 
                     key={val} 
-                    onClick={() => setAmount(val.toString())}
+                    onClick={() => { setAmount(val.toString()); setError(null); }}
                     className="bg-slate-800 hover:bg-slate-700 text-xs py-2 rounded border border-slate-700 text-slate-300"
                 >
                     +{val}

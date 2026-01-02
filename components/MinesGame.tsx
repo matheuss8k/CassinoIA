@@ -4,6 +4,7 @@ import { User, GameStatus } from '../types';
 import { DatabaseService } from '../services/database';
 import { Button } from './UI/Button';
 import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull } from 'lucide-react';
+import { Notification } from './UI/Notification';
 
 interface MinesGameProps {
   user: User;
@@ -18,7 +19,6 @@ interface Tile {
 
 const MIN_BET = 1;
 const MAX_BET = 100;
-const MAX_PROFIT = 500;
 const GRID_SIZE = 25;
 
 const MINES_MULTIPLIERS: { [key: number]: number[] } = {
@@ -48,60 +48,58 @@ const getMinesMultiplierPreview = (minesCount: number, nextRevealedCount: number
     return parseFloat((multiplier * houseEdge).toFixed(2));
 };
 
-// --- OPTIMIZED SOUND SYNTHESIZER (Singleton Pattern) ---
 let audioCtx: AudioContext | null = null;
 
 const playSynthSound = (type: 'gem' | 'bomb' | 'click' | 'cashout' | 'scan') => {
     try {
         if (!audioCtx) {
-            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            audioCtx = new AudioContextClass();
         }
-        // Resume context if suspended (browser autoplay policy)
-        if (audioCtx.state === 'suspended') {
-            audioCtx.resume();
-        }
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
         const ctx = audioCtx;
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.connect(gain);
         gain.connect(ctx.destination);
+        const now = ctx.currentTime;
 
         if (type === 'gem') {
             osc.type = 'sine';
-            osc.frequency.setValueAtTime(800, ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
-            gain.gain.setValueAtTime(0.05, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-            osc.start(); osc.stop(ctx.currentTime + 0.15);
+            osc.frequency.setValueAtTime(800, now);
+            osc.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+            gain.gain.setValueAtTime(0.05, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+            osc.start(); osc.stop(now + 0.15);
         } else if (type === 'bomb') {
             osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(200, ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.5);
-            gain.gain.setValueAtTime(0.2, ctx.currentTime);
-            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
-            osc.start(); osc.stop(ctx.currentTime + 0.5);
+            osc.frequency.setValueAtTime(200, now);
+            osc.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+            gain.gain.setValueAtTime(0.2, now);
+            gain.gain.linearRampToValueAtTime(0, now + 0.5);
+            osc.start(); osc.stop(now + 0.5);
         } else if (type === 'cashout') {
              osc.type = 'square';
-             osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
-             osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1); // E5
-             osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.2); // G5
-             gain.gain.setValueAtTime(0.05, ctx.currentTime);
-             gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.4);
-             osc.start(); osc.stop(ctx.currentTime + 0.4);
+             osc.frequency.setValueAtTime(523.25, now); 
+             osc.frequency.setValueAtTime(659.25, now + 0.1); 
+             osc.frequency.setValueAtTime(783.99, now + 0.2); 
+             gain.gain.setValueAtTime(0.05, now);
+             gain.gain.linearRampToValueAtTime(0, now + 0.4);
+             osc.start(); osc.stop(now + 0.4);
         } else if (type === 'click') {
              osc.type = 'triangle';
-             osc.frequency.setValueAtTime(800, ctx.currentTime);
-             gain.gain.setValueAtTime(0.02, ctx.currentTime);
-             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-             osc.start(); osc.stop(ctx.currentTime + 0.05);
+             osc.frequency.setValueAtTime(800, now);
+             gain.gain.setValueAtTime(0.02, now);
+             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+             osc.start(); osc.stop(now + 0.05);
         } else if (type === 'scan') {
              osc.type = 'sine';
-             osc.frequency.setValueAtTime(1000, ctx.currentTime);
-             osc.frequency.linearRampToValueAtTime(500, ctx.currentTime + 0.2);
-             gain.gain.setValueAtTime(0.02, ctx.currentTime);
-             gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
-             osc.start(); osc.stop(ctx.currentTime + 0.2);
+             osc.frequency.setValueAtTime(1000, now);
+             osc.frequency.linearRampToValueAtTime(500, now + 0.2);
+             gain.gain.setValueAtTime(0.02, now);
+             gain.gain.linearRampToValueAtTime(0, now + 0.2);
+             osc.start(); osc.stop(now + 0.2);
         }
     } catch (e) { console.warn('Audio not supported'); }
 };
@@ -118,7 +116,11 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [profit, setProfit] = useState<number>(0);
   const [currentMultiplier, setCurrentMultiplier] = useState<number>(1.0);
-  const [nextMultiplierPreview, setNextMultiplierPreview] = useState<number>(1.0);
+  
+  // Otimização: useMemo ao invés de state+useEffect para valor derivado
+  const nextMultiplierPreview = useMemo(() => 
+    getMinesMultiplierPreview(mineCount, revealedCount + 1), 
+  [mineCount, revealedCount]);
 
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [aiSuggestion, setAiSuggestion] = useState<number | null>(null);
@@ -126,8 +128,10 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [cashoutWin, setCashoutWin] = useState<number | null>(null);
   const [lossPopup, setLossPopup] = useState<boolean>(false);
   const [loadingTileId, setLoadingTileId] = useState<number | null>(null);
-  const gameOverTimeoutRef = useRef<number | null>(null);
   
+  const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
+
+  const gameOverTimeoutRef = useRef<number | null>(null);
   const isMounted = useRef(true);
   const hasRestored = useRef(false);
 
@@ -136,14 +140,13 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     return () => { isMounted.current = false; };
   }, []);
 
-  // --- RESTORE SESSION LOGIC (ONLY ON MOUNT) ---
+  // Restore Session
   useEffect(() => {
       if (hasRestored.current) return;
       hasRestored.current = true;
 
       if (user.activeGame && user.activeGame.type === 'MINES') {
           const savedGame = user.activeGame;
-          
           setBet(savedGame.bet);
           setMineCount(savedGame.minesCount || 3);
           setStatus(GameStatus.Playing);
@@ -151,18 +154,18 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
           
           const restoredGrid: Tile[] = Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' }));
           
-          let revealedCount = 0;
+          let rCount = 0;
           if (savedGame.minesRevealed) {
               savedGame.minesRevealed.forEach(idx => {
                   restoredGrid[idx].isRevealed = true;
                   restoredGrid[idx].content = 'gem'; 
-                  revealedCount++;
+                  rCount++;
               });
           }
           setGrid(restoredGrid);
-          setRevealedCount(revealedCount);
+          setRevealedCount(rCount);
       }
-  }, []); // Run once
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -171,27 +174,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   }, []);
 
   useEffect(() => {
-    if (cashoutWin !== null) {
+    if (cashoutWin !== null || lossPopup) {
         const timer = setTimeout(() => {
-            if(isMounted.current) setCashoutWin(null);
-        }, 3000);
+            if(isMounted.current) {
+                setCashoutWin(null);
+                setLossPopup(false);
+            }
+        }, 2000); 
         return () => clearTimeout(timer);
     }
-  }, [cashoutWin]);
-
-  useEffect(() => {
-    if (lossPopup) {
-        const timer = setTimeout(() => {
-            if(isMounted.current) setLossPopup(false);
-        }, 3000); 
-        return () => clearTimeout(timer);
-    }
-  }, [lossPopup]);
-
-  useEffect(() => {
-      const nextMult = getMinesMultiplierPreview(mineCount, revealedCount + 1);
-      setNextMultiplierPreview(nextMult);
-  }, [revealedCount, mineCount]);
+  }, [cashoutWin, lossPopup]);
 
   const currentWinValue = useMemo(() => {
     if (status !== GameStatus.Playing) return 0;
@@ -211,13 +203,14 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
       setAiSuggestion(null);
       playSound('click');
       setTimeout(() => {
+          if(!isMounted.current) return;
           const availableTiles = grid.filter(t => !t.isRevealed).map(t => t.id);
           if (availableTiles.length > 0) {
               const randomIndex = Math.floor(Math.random() * availableTiles.length);
               setAiSuggestion(availableTiles[randomIndex]);
               playSound('scan');
           }
-          if(isMounted.current) setIsAiScanning(false);
+          setIsAiScanning(false);
       }, 700);
   };
 
@@ -230,28 +223,20 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     setLossPopup(false);
     setAiSuggestion(null);
 
-    if (bet < MIN_BET) return alert(`Mínimo R$ ${MIN_BET.toFixed(2)}`);
-    if (bet > MAX_BET) return alert(`Máximo R$ ${MAX_BET.toFixed(2)}`);
-    if (bet > user.balance) return alert("Saldo insuficiente.");
+    if (bet < MIN_BET) return setNotifyMsg(`Aposta mínima de R$ ${MIN_BET.toFixed(2)}`);
+    if (bet > MAX_BET) return setNotifyMsg(`Aposta máxima de R$ ${MAX_BET.toFixed(2)}`);
+    if (bet > user.balance) return setNotifyMsg("Saldo insuficiente.");
 
     setIsProcessing(true); 
-    
-    // --- OPTIMISTIC UI: DEDUCT BET IMMEDIATELY ---
     const currentBalance = user.balance;
     updateUser({ balance: currentBalance - bet });
 
     try {
         const response = await DatabaseService.minesStart(user.id, bet, mineCount);
-        
         if(!isMounted.current) return;
 
         setStatus(GameStatus.Playing);
-        
-        // Sync with authoritative balance
-        updateUser({ 
-            balance: response.newBalance,
-            loyaltyPoints: response.loyaltyPoints,
-        });
+        updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
 
         const newGrid = Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' as const }));
         setGrid(newGrid);
@@ -262,9 +247,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
         playSound('click');
 
     } catch (e: any) {
-        // ROLLBACK BALANCE ON ERROR
         updateUser({ balance: currentBalance });
-        alert(e.message || "Erro ao iniciar rodada.");
+        setNotifyMsg(e.message || "Erro ao iniciar rodada.");
         setStatus(GameStatus.Idle);
     } finally {
         if(isMounted.current) setIsProcessing(false); 
@@ -279,7 +263,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
     try {
         const result = await DatabaseService.minesReveal(user.id, index);
-        
         if(!isMounted.current) return;
 
         const newGrid = [...grid];
@@ -291,12 +274,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             playSound('bomb');
             setLossPopup(true);
             
-            if (result.newBalance !== undefined) {
-                 updateUser({ 
-                    balance: result.newBalance,
-                    loyaltyPoints: result.loyaltyPoints,
-                 });
-            }
+            if (result.newBalance !== undefined) updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
 
             if (result.mines) {
                 result.mines.forEach((mineIdx: number) => {
@@ -307,7 +285,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             gameOverTimeoutRef.current = window.setTimeout(() => {
                 if(isMounted.current) setStatus(GameStatus.Idle);
                 gameOverTimeoutRef.current = null;
-            }, 3000);
+            }, 2000); 
         } else {
             newGrid[index].content = 'gem';
             playSound('gem');
@@ -315,12 +293,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             setProfit(result.profit);
             setCurrentMultiplier(result.multiplier);
 
-            if (result.newBalance !== undefined) {
-                updateUser({ 
-                    balance: result.newBalance,
-                    loyaltyPoints: result.loyaltyPoints,
-                });
-            }
+            if (result.newBalance !== undefined) updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
 
             if (result.status === 'WIN_ALL') {
                  setStatus(GameStatus.GameOver);
@@ -338,17 +311,19 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                         setProfit(0);
                     }
                     gameOverTimeoutRef.current = null;
-                }, 4000);
+                }, 3000); 
             }
         }
         setGrid(newGrid);
 
     } catch (error: any) {
         if (error.message && (error.message.includes("não encontrado") || error.message.includes("expirado") || error.message.includes("404"))) {
-            alert("Sessão expirada. Reiniciando...");
+            setNotifyMsg("Sessão expirada. Reiniciando...");
             setStatus(GameStatus.Idle);
             setProfit(0);
             setGrid(Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' as const })));
+        } else {
+            setNotifyMsg(error.message || "Erro de conexão.");
         }
     } finally {
         if(isMounted.current) setLoadingTileId(null);
@@ -360,13 +335,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     setIsProcessing(true);
     try {
         const result = await DatabaseService.minesCashout(user.id);
-        
         if(!isMounted.current) return;
 
-        updateUser({ 
-            balance: result.newBalance,
-            loyaltyPoints: result.loyaltyPoints,
-        });
+        updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
 
         playSound('cashout');
         const winValue = result.profit || currentWinValue; 
@@ -381,26 +352,28 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
              });
              setGrid(finalGrid);
         }
-        setTimeout(() => { if(isMounted.current) setProfit(0); }, 3000);
+        setTimeout(() => { if(isMounted.current) setProfit(0); }, 2000); 
     } catch (e: any) {
         if (e.message && (e.message.includes("não encontrado") || e.message.includes("expirado"))) {
              setStatus(GameStatus.Idle);
              setProfit(0);
         }
+        setNotifyMsg(e.message || "Erro ao realizar saque.");
     } finally {
         if(isMounted.current) setIsProcessing(false);
     }
   };
 
-  const adjustBet = (type: 'half' | 'double' | 'max') => {
+  const adjustBet = (type: 'half' | 'double') => {
     if (status === GameStatus.Playing) return;
     if (type === 'half') setBet(Math.max(MIN_BET, Math.floor(bet / 2)));
     if (type === 'double') setBet(Math.min(Math.min(user.balance, MAX_BET), bet * 2));
-    if (type === 'max') setBet(Math.min(user.balance, MAX_BET));
   };
 
   return (
     <div className="w-full min-h-[calc(100vh-80px)] flex flex-col items-center justify-center p-4 relative animate-fade-in pt-16 md:pt-20 pb-0">
+        <Notification message={notifyMsg} onClose={() => setNotifyMsg(null)} />
+
         <div className="absolute top-5 md:top-8 left-0 right-0 text-center z-20 pointer-events-none">
              <h1 className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]">
                 MINES <span className="text-casino-gold">IA</span>
@@ -424,10 +397,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             </div>
         )}
 
-        {/* CONTAINER PRINCIPAL: MAX-W-1600 e ITEMS-CENTER (IGUAL BLACKJACK) */}
+        {/* CONTAINER PRINCIPAL */}
         <div className="flex flex-col-reverse xl:flex-row items-center justify-center gap-4 xl:gap-8 w-full max-w-[1600px] z-10">
-            
-            {/* PAINEL ESQUERDO (APOSTAS): 320px no Desktop (RESTAURADO TAMANHO ORIGINAL) */}
+            {/* PAINEL ESQUERDO (APOSTAS) */}
             <div className="w-full max-w-md xl:w-[320px] h-[600px] bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-3xl p-6 flex flex-col gap-6 shadow-2xl shrink-0 transition-all mx-auto xl:mx-0">
                 <div className="flex items-center justify-between pb-2 border-b border-white/5">
                     <div className="flex items-center gap-2">
@@ -511,28 +483,25 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                         })}
                     </div>
                 </div>
-
-                {/* WIN POPUP */}
+                {/* Modals/Popups (Win/Loss) code remains effectively the same */}
                 {cashoutWin !== null && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
                          <div className="relative pointer-events-none">
                             <div className="absolute inset-0 bg-green-500 blur-[30px] opacity-10 rounded-full animate-pulse"></div>
-                            <div className="bg-slate-900/95 border-2 border-green-500 p-6 rounded-2xl shadow-[0_0_30px_rgba(34,197,94,0.3)] flex flex-col items-center gap-3 transform scale-100 animate-slide-up relative z-10 min-w-[250px]">
-                                <div className="p-3 bg-green-500/20 rounded-full mb-1 ring-2 ring-green-500/10"><Trophy size={32} className="text-green-400 drop-shadow-[0_0_10px_rgba(34,197,94,0.8)]" /></div>
+                            <div className="bg-slate-900/95 border-2 border-green-500 p-4 rounded-2xl shadow-[0_0_30px_rgba(34,197,94,0.3)] flex flex-col items-center gap-2 transform scale-100 animate-slide-up relative z-10 min-w-[220px]">
+                                <div className="p-3 bg-green-500/20 rounded-full mb-1 ring-2 ring-green-500/10"><Trophy size={28} className="text-green-400 drop-shadow-[0_0_10px_rgba(34,197,94,0.8)]" /></div>
                                 <div className="text-center"><p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-1">Você Sacou</p><p className="text-3xl md:text-4xl font-black text-white tracking-tight drop-shadow-lg">R$ <span className="text-transparent bg-clip-text bg-gradient-to-br from-green-400 to-emerald-600">{cashoutWin.toFixed(2)}</span></p></div>
                                 <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden"><div className="h-full bg-green-500 animate-[shine_2s_infinite]"></div></div>
                             </div>
                          </div>
                     </div>
                 )}
-
-                {/* LOSS POPUP */}
                 {lossPopup && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
                          <div className="relative pointer-events-none">
                             <div className="absolute inset-0 bg-red-500 blur-[30px] opacity-10 rounded-full animate-pulse"></div>
-                            <div className="bg-slate-900/95 border-2 border-red-500 p-6 rounded-2xl shadow-[0_0_30px_rgba(239,68,68,0.3)] flex flex-col items-center gap-3 transform scale-100 animate-slide-up relative z-10 min-w-[250px]">
-                                <div className="p-3 bg-red-500/20 rounded-full mb-1 ring-2 ring-red-500/10"><Skull size={32} className="text-red-400 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]" /></div>
+                            <div className="bg-slate-900/95 border-2 border-red-500 p-4 rounded-2xl shadow-[0_0_30px_rgba(239,68,68,0.3)] flex flex-col items-center gap-2 transform scale-100 animate-slide-up relative z-10 min-w-[220px]">
+                                <div className="p-3 bg-red-500/20 rounded-full mb-1 ring-2 ring-red-500/10"><Skull size={28} className="text-red-400 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)]" /></div>
                                 <div className="text-center"><p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-1">Fim de Jogo</p><p className="text-3xl md:text-4xl font-black text-white tracking-tight drop-shadow-lg text-transparent bg-clip-text bg-gradient-to-br from-red-400 to-red-600">DERROTA</p></div>
                                 <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden"><div className="h-full bg-red-500 animate-[shine_2s_infinite]"></div></div>
                             </div>
@@ -541,7 +510,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                 )}
             </div>
 
-            {/* PAINEL DIREITO (IA): 280px no Desktop (IGUAL BLACKJACK) */}
+            {/* PAINEL DIREITO (IA) */}
             <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0">
                  <div className="w-full animate-slide-up h-full flex flex-col">
                     <div className="bg-slate-900/90 border border-purple-500/30 rounded-3xl p-6 backdrop-blur-xl shadow-[0_0_30px_rgba(168,85,247,0.1)] relative overflow-hidden group flex-1 flex flex-col min-h-[500px]">
@@ -569,7 +538,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             </div>
         </div>
         
-        {/* Footer Injected Here */}
         <div className="w-full text-center py-8 text-slate-600 text-[10px] uppercase tracking-widest font-bold opacity-50 select-none">
             &copy; 2024 Cassino IA. Jogue com responsabilidade.
         </div>
