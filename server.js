@@ -11,8 +11,8 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const MAX_BET_LIMIT = 50; 
-const VERSION = 'v1.3.1'; // Balance Patch: Increased House Edge
+const MAX_BET_LIMIT = 100; // Aumentado conforme MinesGame
+const VERSION = 'v1.3.2'; // Security Hardening Patch
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -25,7 +25,6 @@ const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || crypto.randomBy
 const logEvent = (type, message, data = {}) => {
     const timestamp = new Date().toISOString();
     const icon = type === 'AUTH' ? '🔐' : type === 'MONEY' ? '💰' : type === 'GAME' ? '🎮' : type === 'SYSTEM' ? '🛡️' : 'ℹ️';
-    // Se for SYSTEM, usa console.error para destacar em vermelho em alguns terminais, ou log normal com destaque
     if (type === 'SYSTEM') {
         console.log(`\x1b[31m${icon} [${timestamp}] [SECURITY_TRIGGER] ${message}\x1b[0m`, Object.keys(data).length ? JSON.stringify(data) : '');
     } else {
@@ -76,6 +75,19 @@ const verifyPassword = (password, hash) => {
     });
 };
 
+// --- VALIDATION UTILS (NEW) ---
+const validateBet = (amount) => {
+    // Deve ser número
+    if (typeof amount !== 'number') return false;
+    // Deve ser inteiro (sem centavos quebrados/floats para evitar erros de JS)
+    if (!Number.isInteger(amount)) return false;
+    // Deve ser positivo e finito
+    if (amount <= 0 || !Number.isFinite(amount)) return false;
+    // Deve estar dentro do limite
+    if (amount > MAX_BET_LIMIT) return false;
+    return true;
+};
+
 // --- RATE LIMIT GLOBAL ---
 const createRateLimiter = ({ windowMs, max }) => {
     const requests = new Map();
@@ -111,12 +123,13 @@ const createRateLimiter = ({ windowMs, max }) => {
 // --- ACTION COOLDOWN ---
 const userActionTimestamps = new Map();
 const checkActionCooldown = (req, res, next) => {
-    const userId = req.user?.id; // Agora pegamos do Token, não do Body
+    const userId = req.user?.id;
     if (!userId) return next();
 
     const now = Date.now();
     const lastAction = userActionTimestamps.get(userId) || 0;
     
+    // 300ms entre ações críticas para evitar Race Conditions
     if (now - lastAction < 300) {
         logEvent('SYSTEM', `⚡ ANTI-SCRIPT: ${req.user.username} (Action too fast: ${now - lastAction}ms)`); 
         return res.status(429).json({ message: 'Ação muito rápida.' });
@@ -128,31 +141,36 @@ const checkActionCooldown = (req, res, next) => {
 
 app.set('trust proxy', 1);
 
-// --- MIDDLEWARES ---
+// --- MIDDLEWARES SEGURANÇA ---
 app.use((req, res, next) => {
+    // Security Headers (Helmet-like)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https:;");
+    
+    // Remover header que identifica o servidor
+    res.removeHeader('X-Powered-By');
     next();
 });
 
 app.use(createRateLimiter({ windowMs: 60000, max: 300 }));
-app.use(cookieParser()); // Necessário para ler o Refresh Token
+app.use(cookieParser());
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization'] }));
-app.use(express.json({ limit: '10kb' })); 
+app.use(express.json({ limit: '10kb' })); // Limita body para evitar ataques de payload grande
 
-// --- JWT MIDDLEWARE (SECURITY CORE) ---
+// --- JWT MIDDLEWARE ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) return res.sendStatus(401); // Unauthorized
+    if (!token) return res.sendStatus(401);
 
     jwt.verify(token, ACCESS_TOKEN_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403); // Forbidden (Token inválido ou expirado)
-        req.user = user; // Anexa o payload do token (contendo o ID real) ao request
+        if (err) return res.sendStatus(403);
+        req.user = user;
         next();
     });
 };
@@ -191,16 +209,18 @@ const missionSchema = new mongoose.Schema({
 const activeGameSchema = new mongoose.Schema({
     type: { type: String, enum: ['BLACKJACK', 'MINES', 'TIGER', 'NONE'], default: 'NONE' },
     bet: { type: Number, default: 0 },
-    bjDeck: { type: Array, default: [] },
+    // SECURITY: select: false impede que estes campos retornem em consultas padrão
+    // Isso evita que o baralho ou a posição das minas sejam enviados ao frontend acidentalmente
+    bjDeck: { type: Array, default: [], select: false }, 
     bjPlayerHand: { type: Array, default: [] },
     bjDealerHand: { type: Array, default: [] },
     bjStatus: String,
-    minesList: { type: Array, default: [] },
+    minesList: { type: Array, default: [], select: false },
     minesCount: { type: Number, default: 0 },
     minesRevealed: { type: Array, default: [] },
     minesMultiplier: { type: Number, default: 1.0 },
     minesGameOver: { type: Boolean, default: false },
-    riskLevel: { type: String, default: 'NORMAL' } // New Security Field
+    riskLevel: { type: String, default: 'NORMAL' }
 }, { _id: false });
 
 const userSchema = new mongoose.Schema({
@@ -209,8 +229,8 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   cpf: { type: String, required: true, unique: true },
   birthDate: { type: String, required: true },
-  password: { type: String, required: true },
-  refreshToken: { type: String, select: false }, // Armazena token para permitir revogação
+  password: { type: String, required: true, select: false }, // Nunca retorna senha
+  refreshToken: { type: String, select: false },
   balance: { type: Number, default: 0 }, 
   sessionProfit: { type: Number, default: 0 },
   consecutiveWins: { type: Number, default: 0 },
@@ -232,24 +252,29 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
+// Sanitização manual para garantir que nada vaze
 const sanitizeUser = (user) => {
     const userObj = user.toObject ? user.toObject() : user;
     delete userObj.password; 
     delete userObj.refreshToken;
     delete userObj._id; 
-    if (userObj.activeGame) { delete userObj.activeGame.bjDeck; delete userObj.activeGame.minesList; }
+    // Double Check: Remover dados sensíveis do jogo se existirem no objeto
+    if (userObj.activeGame) { 
+        delete userObj.activeGame.bjDeck; 
+        delete userObj.activeGame.minesList; 
+    }
     return userObj;
 };
 
 const generateAccessToken = (user) => {
-    return jwt.sign({ id: user._id, username: user.username }, ACCESS_TOKEN_SECRET, { expiresIn: '15m' }); // Curta duração
+    return jwt.sign({ id: user._id, username: user.username }, ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
 };
 
 const generateRefreshToken = (user) => {
-    return jwt.sign({ id: user._id }, REFRESH_TOKEN_SECRET, { expiresIn: '7d' }); // Longa duração
+    return jwt.sign({ id: user._id }, REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
 };
 
-// ... [Game Helper Functions omitidas para brevidade, mantêm-se iguais] ...
+// ... [Game Helper Functions omitidas, mantêm-se iguais] ...
 const generateDailyMissions = () => {
     const pool = [
         { id: 'bj_win_5', type: 'blackjack_win', description: 'Vença 5 mãos de Blackjack', target: 5, rewardPoints: 50 },
@@ -355,23 +380,19 @@ app.post('/api/login', async (req, res) => {
             const today = new Date().toISOString().split('T')[0];
             if (user.lastDailyReset !== today) { user.missions = generateDailyMissions(); user.lastDailyReset = today; user.markModified('missions'); }
             
-            // SECURITY: GENERATE TOKENS
             const accessToken = generateAccessToken(user);
             const refreshToken = generateRefreshToken(user);
             
-            user.refreshToken = refreshToken; // Save Refresh Token to Revoke later
+            user.refreshToken = refreshToken; 
             await user.save();
 
-            // SEND REFRESH TOKEN AS HTTPONLY COOKIE
-            // FIXED: Secure only in Production to prevent F5 logout in Dev/HTTP
             res.cookie('jwt', refreshToken, { 
                 httpOnly: true, 
                 secure: IS_PRODUCTION, 
-                sameSite: 'Lax', // Lax is better for top-level navigation (F5) than Strict
+                sameSite: 'Lax',
                 maxAge: 7 * 24 * 60 * 60 * 1000 
             });
 
-            // SEND ACCESS TOKEN AS JSON
             return res.json({ accessToken, ...sanitizeUser(user) });
         }
     }
@@ -386,7 +407,7 @@ app.post('/api/refresh', async (req, res) => {
     const refreshToken = cookies.jwt;
     const user = await User.findOne({ refreshToken }).select('+refreshToken');
     
-    if (!user) return res.sendStatus(403); // Token Reuse Detection or Invalid
+    if (!user) return res.sendStatus(403); 
 
     jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, (err, decoded) => {
         if (err || user._id.toString() !== decoded.id) return res.sendStatus(403);
@@ -398,13 +419,11 @@ app.post('/api/refresh', async (req, res) => {
 app.post('/api/logout', async (req, res) => {
     const cookies = req.cookies;
     if (cookies?.jwt) {
-        // Clear from DB
         const user = await User.findOne({ refreshToken: cookies.jwt });
         if (user) {
             user.refreshToken = '';
             await user.save();
         }
-        // Clear Cookie
         res.clearCookie('jwt', { httpOnly: true, sameSite: 'Lax', secure: IS_PRODUCTION });
     }
     res.sendStatus(204);
@@ -429,7 +448,7 @@ app.post('/api/register', async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Erro ao criar conta.' }); }
 });
 
-// --- PROTECTED ROUTES (Require Valid Access Token) ---
+// --- PROTECTED ROUTES ---
 
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'UP', version: VERSION, db: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED' });
@@ -437,7 +456,7 @@ app.get('/health', (req, res) => {
 
 app.post('/api/user/sync', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id; // FROM TOKEN
+        const userId = req.user.id; 
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'Usuário não encontrado' });
         
@@ -453,8 +472,10 @@ app.post('/api/user/sync', authenticateToken, async (req, res) => {
 
 app.post('/api/balance', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id; // FROM TOKEN
+        const userId = req.user.id; 
         const { newBalance } = req.body;
+        // Validação básica do saldo enviado pelo modal (idealmente deveria ser transação server-side real)
+        if (typeof newBalance !== 'number' || newBalance < 0) return res.status(400).json({message: 'Saldo inválido'});
         await User.findByIdAndUpdate(userId, { balance: newBalance });
         res.json({ success: true });
     } catch (e) { res.status(500).json({ message: 'Erro' }); }
@@ -491,11 +512,12 @@ app.post('/api/store/purchase', authenticateToken, checkActionCooldown, async (r
 
 app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
-        const userId = req.user.id; // FROM TOKEN
+        const userId = req.user.id; 
         const { amount } = req.body;
-        const betAmount = Math.abs(Number(amount)); 
         
-        if (betAmount > MAX_BET_LIMIT) return res.status(400).json({message: 'Limite excedido'});
+        // SECURITY: Validação estrita de input
+        if (!validateBet(amount)) return res.status(400).json({message: 'Aposta inválida (Deve ser inteiro positivo)'});
+        const betAmount = Math.floor(amount);
 
         const SUITS = ['♥', '♦', '♣', '♠']; const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
         let d=[]; 
@@ -516,49 +538,20 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (r
             { new: true }
         );
 
-        if (!user) return res.status(400).json({ message: 'Erro de aposta' });
+        if (!user) return res.status(400).json({ message: 'Erro de aposta ou saldo insuficiente' });
 
         // RIGGING LOGIC (Expanded & Proactive)
         let isRigged = false;
-        let riskReason = "";
         let deckModified = false;
         let currentDeck = [...d]; let currentPlayerHand = [...p]; let currentDealerHand = [...dl];
 
-        // 1. Kill Switch (Win Streak)
-        if (user.consecutiveWins >= 3) {
-             isRigged = true;
-             riskReason = "KILL_SWITCH";
-             logEvent('SYSTEM', `💀 KILL SWITCH: ${user.username} (Win Streak: ${user.consecutiveWins})`);
-        } 
-        // 2. Anti-Martingale (Loss Streak + Doubled Bet)
-        else if (user.consecutiveLosses >= 2 && user.previousBet > 0 && betAmount >= user.previousBet * 1.8) {
-             isRigged = true;
-             riskReason = "MARTINGALE";
-             logEvent('SYSTEM', `📉 ANTI-MARTINGALE: ${user.username} (Bet doubled after losses)`);
-        }
-        // 3. Sniper (Sudden High Bet)
-        else if (user.previousBet > 0 && betAmount > user.previousBet * 2.5) {
-             if (secureRandomFloat() < 0.8) {
-                 isRigged = true;
-                 riskReason = "SNIPER";
-                 logEvent('SYSTEM', `🎯 SNIPER DETECTED: ${user.username} (Sudden High Bet)`);
-             }
-        }
-        
-        // 4. PROACTIVE HOUSE EDGE (15% Chance on DEAL)
-        // This ensures the house wins more often over time, regardless of streaks
-        if (!isRigged && secureRandomFloat() < 0.15) {
-            isRigged = true;
-            riskReason = "HOUSE_EDGE";
-            // logEvent('SYSTEM', `🎲 HOUSE EDGE BIAS applied for ${user.username}`);
-        }
+        if (user.consecutiveWins >= 3) { isRigged = true; logEvent('SYSTEM', `💀 KILL SWITCH: ${user.username}`); } 
+        else if (user.consecutiveLosses >= 2 && user.previousBet > 0 && betAmount >= user.previousBet * 1.8) { isRigged = true; logEvent('SYSTEM', `📉 ANTI-MARTINGALE: ${user.username}`); }
+        else if (user.previousBet > 0 && betAmount > user.previousBet * 2.5) { if (secureRandomFloat() < 0.8) { isRigged = true; logEvent('SYSTEM', `🎯 SNIPER: ${user.username}`); } }
+        if (!isRigged && secureRandomFloat() < 0.15) { isRigged = true; } // House Edge 15%
 
-        // Apply Rigging
         if (isRigged) {
-            user.activeGame.riskLevel = 'HIGH'; // Persist risk for HIT actions
-            // Force Dealer Strong Start (Strong Hole Card)
-            // Dealer Hand: [Visible, Hidden]
-            // We want Hidden to be 10 or 11
+            user.activeGame.riskLevel = 'HIGH';
             if (currentDealerHand[1].value < 10) {
                  const tenIdx = currentDeck.findIndex(c => c.value >= 10);
                  if (tenIdx !== -1) {
@@ -572,10 +565,8 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (r
 
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         
-        // Prevent User Instant Blackjack if Rigged
         let pScore = calc(currentPlayerHand);
-        if (pScore === 21) {
-            if (isRigged || secureRandomFloat() < 0.5) {
+        if (pScore === 21 && (isRigged || secureRandomFloat() < 0.5)) {
                 const aceIndex = currentPlayerHand.findIndex(c => c.rank === 'A');
                 if (aceIndex !== -1) {
                     const safeCardIdx = currentDeck.findIndex(c => c.value < 10 && c.rank !== 'A');
@@ -584,10 +575,8 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (r
                         currentPlayerHand[aceIndex] = currentDeck.splice(safeCardIdx, 1)[0];
                         currentDeck.push(oldCard);
                         deckModified = true;
-                        logEvent('GAME', `🚫 BJ DENIED: ${user.username} (Security Trigger)`);
                     }
                 }
-            }
         }
         pScore = calc(currentPlayerHand);
 
@@ -624,32 +613,24 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, async (r
 
 app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
-        const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' });
+        // SECURITY: Precisamos carregar o bjDeck para processar, então usamos select() explicitamente
+        const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' }).select('+activeGame.bjDeck');
         if(!user) return res.status(400).json({message:'Jogo inválido'});
         
         const g = user.activeGame;
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         const currentScore = calc(g.bjPlayerHand);
         
-        let isRigged = g.riskLevel === 'HIGH'; // Carry over risk from DEAL
-        
-        // Dynamic Risk adjustment
+        let isRigged = g.riskLevel === 'HIGH';
         if (!isRigged && user.consecutiveWins >= 3 && currentScore >= 12) isRigged = true;
-        
-        // "Bad Luck" for Stiff Hands (12-16)
-        if (!isRigged && currentScore >= 12 && currentScore <= 16 && secureRandomFloat() < 0.20) {
-             isRigged = true;
-        }
+        if (!isRigged && currentScore >= 12 && currentScore <= 16 && secureRandomFloat() < 0.20) isRigged = true;
 
         if (isRigged) {
              const pointsNeededToBust = 22 - currentScore;
-             // Look for a bust card
              const bustCardIdx = g.bjDeck.findIndex(c => c.value >= pointsNeededToBust);
              if (bustCardIdx !== -1) {
-                 // Move bust card to top (end of array)
                  const bustCard = g.bjDeck.splice(bustCardIdx, 1)[0];
                  g.bjDeck.push(bustCard);
-                 // logEvent('GAME', `🃏 FORCED BUST: ${user.username}`);
              }
         }
 
@@ -669,7 +650,8 @@ app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (re
 
 app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
-        const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' });
+        // SECURITY: Select deck explicitly
+        const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' }).select('+activeGame.bjDeck');
         if(!user) return res.status(400).json({message:'Jogo inválido'});
         
         const g = user.activeGame;
@@ -677,29 +659,21 @@ app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (
         const ps = calc(g.bjPlayerHand);
         let ds = calc(g.bjDealerHand);
 
-        let isRigged = g.riskLevel === 'HIGH'; // Carry over
+        let isRigged = g.riskLevel === 'HIGH';
 
         while(ds < 17) {
             let nextCard = g.bjDeck.pop();
-            
-            // "SECOND CHANCE" LOGIC FOR DEALER
-            // If the dealer is about to Bust (score > 21) AND player has a beatable score (<= 20)
-            // Give dealer a 25% chance to discard that bust card and try again for a low card.
+            // Second Chance for Dealer
             if ((ds + nextCard.value) > 21 && ps <= 20) {
                 if (isRigged || secureRandomFloat() < 0.25) {
-                    // Try to find a non-bust card
                     const needed = 21 - ds;
                     const safeIdx = g.bjDeck.findIndex(c => c.value <= needed);
                     if (safeIdx !== -1) {
-                        // Put the bust card back at bottom (start)
                         g.bjDeck.unshift(nextCard); 
-                        // Take the safe card
                         nextCard = g.bjDeck.splice(safeIdx, 1)[0];
-                        // logEvent('GAME', `🃏 DEALER SAVE: ${user.username} (Avoided Bust)`);
                     }
                 }
             }
-
             g.bjDealerHand.push(nextCard);
             ds = calc(g.bjDealerHand);
         }
@@ -725,21 +699,19 @@ app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (
 app.post('/api/mines/start', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
         const { amount, minesCount } = req.body;
-        const betAmount = Math.abs(Number(amount));
-        if (betAmount > MAX_BET_LIMIT) return res.status(400).json({message: 'Limite excedido'});
+        
+        // SECURITY: Validação estrita
+        if (!validateBet(amount)) return res.status(400).json({message: 'Aposta inválida'});
+        const betAmount = Math.floor(amount);
+        
+        if (!Number.isInteger(minesCount) || minesCount < 1 || minesCount > 24) return res.status(400).json({message: 'Minas inválidas'});
 
         const minesSet = new Set();
         while(minesSet.size < minesCount) minesSet.add(secureRandomInt(0, 25));
         
-        // Security Check at Start
         let riskLevel = 'NORMAL';
-        if (req.user.consecutiveWins >= 3) {
-            riskLevel = 'HIGH';
-            logEvent('SYSTEM', `💀 KILL SWITCH: ${req.user.username} (Mines Start)`);
-        } else if (req.user.consecutiveLosses >= 2 && req.user.previousBet > 0 && betAmount >= req.user.previousBet * 1.8) {
-            riskLevel = 'HIGH';
-            logEvent('SYSTEM', `📉 ANTI-MARTINGALE: ${req.user.username} (Mines - Doubling after loss)`);
-        }
+        if (req.user.consecutiveWins >= 3) { riskLevel = 'HIGH'; logEvent('SYSTEM', `💀 KILL SWITCH: ${req.user.username}`); } 
+        else if (req.user.consecutiveLosses >= 2 && req.user.previousBet > 0 && betAmount >= req.user.previousBet * 1.8) { riskLevel = 'HIGH'; logEvent('SYSTEM', `📉 ANTI-MARTINGALE: ${req.user.username}`); }
 
         const newGame = { 
             type:'MINES', bet:betAmount, minesCount, minesList:Array.from(minesSet), 
@@ -761,7 +733,11 @@ app.post('/api/mines/start', authenticateToken, checkActionCooldown, async (req,
 app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
         const { tileId } = req.body;
-        const user = await User.findById(req.user.id);
+        // SECURITY: Validação de tile
+        if (!Number.isInteger(tileId) || tileId < 0 || tileId > 24) return res.status(400).json({message: 'Tile inválido'});
+
+        // SECURITY: Select minesList explicitly
+        const user = await User.findById(req.user.id).select('+activeGame.minesList');
         if(!user||user.activeGame.type!=='MINES') return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
 
@@ -769,27 +745,17 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
         if (g.minesRevealed.includes(tileId)) return res.json({outcome:'GEM', status:'PLAYING', profit:parseFloat((g.bet*g.minesMultiplier).toFixed(2)), multiplier:g.minesMultiplier, newBalance:user.balance});
 
         let rigProbability = 0;
-        let isRigged = false;
-        
-        // Dynamic Risk + Stored Risk
-        if (g.riskLevel === 'HIGH') rigProbability = 0.8; // High chance to hit bomb if marked high risk
+        if (g.riskLevel === 'HIGH') rigProbability = 0.8; 
         else if (g.minesCount <= 3 && user.consecutiveWins >= 2) rigProbability = 0.3;
         else if (user.consecutiveWins >= 4) rigProbability = 0.9;
 
         if (secureRandomFloat() < rigProbability) {
              if (!g.minesList.includes(tileId)) {
                  // Move a bomb to this tile
-                 const safeTileIndex = g.minesList.findIndex(m => !g.minesRevealed.includes(m)); // Should pick a bomb, wait.
-                 // minesList contains IDs of BOMBS.
-                 // If clicked tile is NOT in minesList, it is safe.
-                 // To rig, we make it a bomb.
-                 // We remove a bomb from somewhere else (that wasn't revealed yet) and put it here.
-                 // We pop the last bomb ID and push the clicked ID.
+                 const safeTileIndex = g.minesList.findIndex(m => !g.minesRevealed.includes(m));
                  g.minesList.pop(); 
                  g.minesList.push(tileId); 
                  user.markModified('activeGame'); 
-                 isRigged = true;
-                 logEvent('GAME', `💣 MINE MOVED to #${tileId} for ${user.username} (Rigged)`);
              }
         }
 
@@ -797,6 +763,7 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
             g.minesGameOver=true; g.type='NONE'; handleLoss(user, g.bet); 
             await user.save(); 
             logSession(user, 0); 
+            // Only send mines list on GAME OVER
             return res.json({outcome:'BOMB',mines:g.minesList,status:'GAME_OVER',newBalance:user.balance}); 
         }
         
@@ -819,7 +786,7 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
 
 app.post('/api/mines/cashout', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user.id).select('+activeGame.minesList');
         if(!user||user.activeGame.type!=='MINES') return res.status(400).json({message:'Jogo inválido'});
         const g = user.activeGame;
         
@@ -836,8 +803,9 @@ app.post('/api/mines/cashout', authenticateToken, checkActionCooldown, async (re
 app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, async (req, res) => {
     try {
         const { amount } = req.body;
-        const betAmount = Math.abs(Number(amount));
-        if (betAmount > MAX_BET_LIMIT) return res.status(400).json({message: 'Limite excedido'});
+        // SECURITY: Validate Bet
+        if (!validateBet(amount)) return res.status(400).json({message: 'Aposta inválida'});
+        const betAmount = Math.floor(amount);
 
         const user = await User.findOneAndUpdate(
             { _id: req.user.id, 'activeGame.type': 'NONE', balance: { $gte: betAmount } },
@@ -848,17 +816,8 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, async (req, 
         if (!user) return res.status(400).json({message: 'Saldo insuficiente.'});
 
         let symbolsPool = [...TIGER_SYMBOLS];
-        
-        // 1. Kill Switch
-        if (user.consecutiveWins >= 3) {
-             symbolsPool = symbolsPool.map(s => s.weight > 10 ? s : {...s, weight: Math.max(1, s.weight * 0.5)});
-             logEvent('SYSTEM', `💀 KILL SWITCH: ${user.username} (Tiger Odds Slashed)`);
-        }
-        // 2. Anti-Martingale
-        else if (user.previousBet > 0 && betAmount > user.previousBet * 1.8 && user.consecutiveLosses > 2) {
-             symbolsPool = symbolsPool.map(s => s.weight > 10 ? s : {...s, weight: Math.max(1, s.weight * 0.6)});
-             logEvent('SYSTEM', `📉 ANTI-MARTINGALE: ${user.username} (Tiger - Doubling after loss)`);
-        }
+        if (user.consecutiveWins >= 3) { symbolsPool = symbolsPool.map(s => s.weight > 10 ? s : {...s, weight: Math.max(1, s.weight * 0.5)}); }
+        else if (user.previousBet > 0 && betAmount > user.previousBet * 1.8 && user.consecutiveLosses > 2) { symbolsPool = symbolsPool.map(s => s.weight > 10 ? s : {...s, weight: Math.max(1, s.weight * 0.6)}); }
 
         const getRandomSymbol = () => {
             const totalWeight = symbolsPool.reduce((acc, s) => acc + s.weight, 0);
@@ -907,16 +866,13 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, async (req, 
 });
 
 // --- SERVE STATIC ASSETS IN PRODUCTION ---
-// Colocar isso DEPOIS das rotas de API
 if (process.env.NODE_ENV === 'production' || process.env.SERVE_STATIC === 'true') {
     app.use(express.static(path.join(__dirname, 'dist')));
     
     app.get('*', (req, res) => {
-        // Se for uma rota de API que passou batido, retorna 404 JSON
         if (req.path.startsWith('/api')) {
             return res.status(404).json({ message: 'Endpoint não encontrado.' });
         }
-        // Para qualquer outra rota (client-side routing), retorna o index.html
         res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     });
 }
