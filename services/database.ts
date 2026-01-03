@@ -49,8 +49,15 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
                     credentials: 'include'
                 });
                 
+                // Se o refresh retornar OK, verifica se temos token ou se é nulo
                 if (refreshResponse.ok) {
                     const data = await refreshResponse.json();
+                    
+                    if (!data.accessToken) {
+                        _accessToken = null;
+                        throw new Error("Sessão expirada.");
+                    }
+
                     _accessToken = data.accessToken;
                     const newHeaders = { ...headers, 'Authorization': `Bearer ${_accessToken}` };
                     options.headers = newHeaders;
@@ -105,9 +112,16 @@ export const DatabaseService = {
               headers: { 'x-client-version': CLIENT_VERSION },
               credentials: 'include'
           });
+          
           if (!refreshResponse.ok) throw new Error("Sessão inválida");
           
           const data = await refreshResponse.json();
+          
+          // NOVO: Se accessToken for null, consideramos não logado e lançamos erro controlado
+          if (!data.accessToken) {
+              throw new Error("Não autenticado");
+          }
+          
           _accessToken = data.accessToken;
 
           const syncResponse = await fetchWithRetry(`${API_URL}/user/sync`, { method: 'POST', body: JSON.stringify({}) });

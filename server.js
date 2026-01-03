@@ -311,12 +311,24 @@ app.post('/api/login', validateRequest(LoginSchema), async (req, res) => {
 
 app.post('/api/refresh', async (req, res) => {
     const cookies = req.cookies;
-    if (!cookies?.jwt) return res.sendStatus(401);
+    
+    // CORREÇÃO: Retorna 200 com null em vez de 401 para evitar erro no console ao iniciar
+    if (!cookies?.jwt) return res.json({ accessToken: null });
+    
     if (mongoose.connection.readyState !== 1) { connectDB(); return res.sendStatus(503); }
+    
     const user = await User.findOne({ refreshToken: cookies.jwt });
-    if (!user) return res.sendStatus(403); 
+    
+    if (!user) {
+        res.clearCookie('jwt', { httpOnly: true, sameSite: IS_PRODUCTION ? 'None' : 'Lax', secure: IS_PRODUCTION });
+        return res.json({ accessToken: null });
+    }
+    
     jwt.verify(cookies.jwt, REFRESH_TOKEN_SECRET, (err, decoded) => {
-        if (err || user._id.toString() !== decoded.id) return res.sendStatus(403);
+        if (err || user._id.toString() !== decoded.id) {
+             res.clearCookie('jwt', { httpOnly: true, sameSite: IS_PRODUCTION ? 'None' : 'Lax', secure: IS_PRODUCTION });
+             return res.json({ accessToken: null });
+        }
         res.json({ accessToken: jwt.sign({ id: user._id, username: user.username }, ACCESS_TOKEN_SECRET, { expiresIn: '15m' }) });
     });
 });
