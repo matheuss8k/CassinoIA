@@ -527,6 +527,46 @@ app.post('/api/user/sync', authenticateToken, async (req, res) => {
     res.json(sanitizeUser(freshUser));
 });
 
+// --- PROFILE & STORE ROUTES ---
+app.post('/api/user/avatar', authenticateToken, validateRequest(z.object({ avatarId: z.string() })), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        // Verifica se é avatar premium e se o usuário possui
+        if (req.body.avatarId.startsWith('avatar_') && !user.ownedItems.includes(req.body.avatarId)) {
+            return res.status(403).json({ message: 'Você não possui este avatar.' });
+        }
+        user.avatarId = req.body.avatarId;
+        await user.save();
+        res.json({ success: true, avatarId: user.avatarId });
+    } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+app.post('/api/user/verify', authenticateToken, async (req, res) => {
+    try {
+        await User.updateOne({ _id: req.user.id }, { documentsStatus: 'PENDING' });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+app.post('/api/store/purchase', authenticateToken, validateRequest(z.object({ itemId: z.string(), cost: z.number().int().positive() })), async (req, res) => {
+    try {
+        const { itemId, cost } = req.body;
+        const user = await User.findById(req.user.id);
+        
+        if (user.loyaltyPoints < cost) return res.status(400).json({ message: 'Pontos insuficientes.' });
+        if (user.ownedItems.includes(itemId)) return res.status(400).json({ message: 'Item já adquirido.' });
+
+        user.loyaltyPoints -= cost;
+        user.ownedItems.push(itemId);
+        
+        // Se for avatar, equipa automaticamente
+        if (itemId.startsWith('avatar_')) user.avatarId = itemId;
+
+        await user.save();
+        res.json({ success: true, newPoints: user.loyaltyPoints, ownedItems: user.ownedItems });
+    } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
 // --- BLACKJACK ENGINE ---
 app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validateRequest(BetSchema), async (req, res) => {
     try {
@@ -923,14 +963,21 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
     } catch(e) { res.status(400).json({message: e.message}); }
 });
 
-// Serve Static Assets
-if (process.env.NODE_ENV === 'production' || process.env.SERVE_STATIC === 'true') {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (req, res) => { 
-        if (req.path.startsWith('/api')) return res.status(404).json({ message: 'Endpoint não encontrado.' });
-        res.sendFile(path.join(__dirname, 'dist', 'index.html')); 
-    });
-}
+// Serve Static Assets (ALWAYS ACTIVE IN THIS FIX)
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Catch-All para React Router (Serve o index.html se não for rota de API)
+app.get('*', (req, res) => { 
+    if (req.path.startsWith('/api')) {
+        return res.status(404).json({ message: 'Endpoint não encontrado.' });
+    }
+    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath); 
+    } else {
+        res.status(500).send("Erro crítico: Build do frontend não encontrado. Execute 'npm run build'.");
+    }
+});
 
 const startServer = async () => { 
     connectDB(); 

@@ -1,26 +1,12 @@
 
 import { User } from '../types';
 
-const GET_BASE_URL = () => {
-    // Se estiver rodando no navegador (client-side)
-    if (typeof window !== 'undefined') {
-        const hostname = window.location.hostname;
-        
-        // No localhost, SEMPRE usa o proxy do Vite (/api) para evitar CORS
-        // Isso faz o navegador pensar que está acessando o mesmo domínio (Same-Origin)
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return '/api';
-        }
-    }
-    
-    // Fallback para produção ou configuração de ambiente
-    const envUrl = (import.meta as any).env?.VITE_API_URL;
-    if (envUrl) return envUrl;
-    
-    return '/api';
-};
+// --- CORREÇÃO DE CONEXÃO ---
+// Forçamos o uso de caminho relativo.
+// Em desenvolvimento (Vite): O proxy redireciona '/api' -> 'localhost:3000'
+// Em produção (Render): O navegador usa 'https://seusite.com/api' automaticamente.
+const API_URL = '/api';
 
-const API_URL = GET_BASE_URL();
 const CLIENT_VERSION = 'v2.1.0-RELEASE'; // Deve bater com o servidor
 
 // Armazenamento do token em memória (Segurança contra XSS)
