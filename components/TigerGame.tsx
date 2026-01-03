@@ -280,15 +280,14 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
             playSound('stop');
             
             if (response.totalWin > 0) {
-                setTimeout(() => {
-                    if(!isMounted.current) return;
-                    setWinningLines(response.winningLines);
-                    setWinAmount(response.totalWin);
-                    setIsFullScreenWin(response.isFullScreen);
-                    
-                    if (response.isFullScreen) playSound('multiplier');
-                    else playSound(response.totalWin > bet * 10 ? 'win_big' : 'win_small');
-                }, 300);
+                // Feedback imediato sem delay
+                if(!isMounted.current) return;
+                setWinningLines(response.winningLines);
+                setWinAmount(response.totalWin);
+                setIsFullScreenWin(response.isFullScreen);
+                
+                if (response.isFullScreen) playSound('multiplier');
+                else playSound(response.totalWin > bet * 10 ? 'win_big' : 'win_small');
             }
         } catch (e: any) {
             updateUser({ balance: currentBalance });

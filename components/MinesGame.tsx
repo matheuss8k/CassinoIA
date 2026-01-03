@@ -109,6 +109,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   
   const [mineCount, setMineCount] = useState<number>(3);
   const [bet, setBet] = useState<number>(5);
+  const [betInput, setBetInput] = useState<string>("5.00"); // State to handle input text directly
+
   const [status, setStatus] = useState<GameStatus>(GameStatus.Idle);
   const [revealedCount, setRevealedCount] = useState<number>(0);
   
@@ -146,7 +148,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
       if (user.activeGame && user.activeGame.type === 'MINES') {
           const savedGame = user.activeGame;
-          setBet(savedGame.bet);
+          const restoredBet = savedGame.bet;
+          setBet(restoredBet);
+          setBetInput(restoredBet.toFixed(2));
           setMineCount(savedGame.minesCount || 3);
           setStatus(GameStatus.Playing);
           setCurrentMultiplier(savedGame.minesMultiplier || 1.0);
@@ -213,6 +217,35 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
       }, 700);
   };
 
+  const handleBetChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (status !== GameStatus.Idle) return;
+      const val = e.target.value;
+      
+      // Regex para permitir digitação livre mas limitar formato:
+      // Aceita vazio, números inteiros ou decimais até 2 casas
+      if (val === '' || /^\d+(\.\d{0,2})?$/.test(val)) {
+          setBetInput(val);
+          const numVal = parseFloat(val);
+          if (!isNaN(numVal)) {
+              setBet(numVal);
+          } else {
+              setBet(0);
+          }
+      }
+  };
+
+  const handleBetBlur = () => {
+      let numVal = parseFloat(betInput);
+      if (isNaN(numVal)) numVal = MIN_BET;
+      
+      // Clamping Logic
+      if (numVal < MIN_BET) numVal = MIN_BET;
+      if (numVal > MAX_BET) numVal = MAX_BET;
+      
+      setBet(numVal);
+      setBetInput(numVal.toFixed(2));
+  };
+
   const startGame = async () => {
     if (gameOverTimeoutRef.current) {
         clearTimeout(gameOverTimeoutRef.current);
@@ -222,16 +255,19 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     setLossPopup(false);
     setAiSuggestion(null);
 
-    if (bet < MIN_BET) return setNotifyMsg(`Aposta mínima de R$ ${MIN_BET.toFixed(2)}`);
-    if (bet > MAX_BET) return setNotifyMsg(`Aposta máxima de R$ ${MAX_BET.toFixed(2)}`);
-    if (bet > user.balance) return setNotifyMsg("Saldo insuficiente.");
+    // Final Validation before start
+    const finalBet = bet;
+
+    if (finalBet < MIN_BET) return setNotifyMsg(`Aposta mínima de R$ ${MIN_BET.toFixed(2)}`);
+    if (finalBet > MAX_BET) return setNotifyMsg(`Aposta máxima de R$ ${MAX_BET.toFixed(2)}`);
+    if (finalBet > user.balance) return setNotifyMsg("Saldo insuficiente.");
 
     setIsProcessing(true); 
     const currentBalance = user.balance;
-    updateUser({ balance: currentBalance - bet });
+    updateUser({ balance: currentBalance - finalBet });
 
     try {
-        const response = await DatabaseService.minesStart(user.id, bet, mineCount);
+        const response = await DatabaseService.minesStart(user.id, finalBet, mineCount);
         if(!isMounted.current) return;
 
         setStatus(GameStatus.Playing);
@@ -366,8 +402,25 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
   const adjustBet = (type: 'half' | 'double') => {
     if (status === GameStatus.Playing) return;
-    if (type === 'half') setBet(Math.max(MIN_BET, Math.floor(bet / 2)));
-    if (type === 'double') setBet(Math.min(Math.min(user.balance, MAX_BET), bet * 2));
+    
+    let newVal = bet;
+    
+    if (type === 'half') {
+        newVal = Math.max(MIN_BET, bet / 2);
+    } else if (type === 'double') {
+        // Ensure double doesn't exceed Max Bet or User Balance
+        newVal = bet * 2;
+        if (newVal > MAX_BET) newVal = MAX_BET;
+        if (newVal > user.balance) newVal = user.balance; 
+        // Ensure it doesn't drop below min if balance is weirdly low (edge case)
+        if (newVal < MIN_BET) newVal = MIN_BET;
+    }
+    
+    // Fix precision issues (e.g. 10.55 * 2 = 21.1)
+    newVal = parseFloat(newVal.toFixed(2));
+    
+    setBet(newVal);
+    setBetInput(newVal.toFixed(2));
   };
 
   return (
@@ -418,7 +471,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     
                     <div className="relative mb-3">
                         <span className={`absolute left-3 top-1/2 -translate-y-1/2 font-bold ${status === GameStatus.Playing ? 'text-casino-gold' : 'text-slate-500'}`}>R$</span>
-                        <input type="number" min={MIN_BET} max={MAX_BET} value={bet} onChange={(e) => { if (status !== GameStatus.Idle) return; const val = Math.floor(Number(e.target.value)); if (val >= 0) setBet(val); }} onBlur={() => { if (status === GameStatus.Idle) { if (bet < MIN_BET && bet !== 0) setBet(MIN_BET); if (bet > MAX_BET) setBet(MAX_BET); } }} disabled={status === GameStatus.Playing} className={`w-full border-2 rounded-xl py-3 pl-10 pr-4 font-bold outline-none transition-colors text-lg [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${status === GameStatus.Playing ? 'bg-black/40 border-casino-gold/30 text-casino-gold opacity-100' : 'bg-slate-900 border-slate-700 text-white focus:border-casino-gold'}`} />
+                        {/* INPUT MODIFICADO PARA TEXTO COM CONTROLE MANUAL */}
+                        <input 
+                            type="text" 
+                            inputMode="decimal"
+                            value={betInput} 
+                            onChange={handleBetChange} 
+                            onBlur={handleBetBlur}
+                            disabled={status === GameStatus.Playing} 
+                            className={`w-full border-2 rounded-xl py-3 pl-10 pr-4 font-bold outline-none transition-colors text-lg ${status === GameStatus.Playing ? 'bg-black/40 border-casino-gold/30 text-casino-gold opacity-100' : 'bg-slate-900 border-slate-700 text-white focus:border-casino-gold'}`} 
+                        />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                         <button onClick={() => adjustBet('half')} disabled={status === GameStatus.Playing} className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs py-2 rounded-lg font-bold transition-colors disabled:opacity-30">½</button>
@@ -534,7 +596,18 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                                         {!isAiScanning && (<div className="absolute -top-2 -right-2 text-purple-300 animate-bounce"><Sparkles size={16} /></div>)}
                                     </div>
                                     <div className="text-center space-y-1 my-2"><h4 className="text-white font-bold text-lg">{isAiScanning ? 'ANALISANDO...' : 'IA PRONTA'}</h4><p className="text-xs text-slate-400 max-w-[200px]">{isAiScanning ? 'Calculando probabilidades de campo seguro...' : 'A IA pode sugerir o próximo campo com maior probabilidade de segurança.'}</p></div>
-                                    <Button onClick={handleAskAi} disabled={isAiScanning || aiSuggestion !== null} className={`w-full py-4 mt-auto border border-purple-500/50 shadow-[0_0_20px_rgba(168,85,247,0.2)] hover:shadow-[0_0_30px_rgba(168,85,247,0.4)] transition-all ${isAiScanning ? 'bg-purple-900/50 cursor-wait' : 'bg-gradient-to-r from-purple-900 to-indigo-900'}`}><div className="flex items-center justify-center gap-2">{isAiScanning ? (<span className="text-xs uppercase tracking-widest">Processando</span>) : (<><Scan size={18} /><span className="text-xs font-bold uppercase tracking-widest">ESCANEAR CAMPO</span></>)}</div></Button>
+                                    
+                                    {/* FIX: Variant changed to "secondary" to avoid gold background clash */}
+                                    <Button 
+                                        onClick={handleAskAi} 
+                                        disabled={isAiScanning || aiSuggestion !== null} 
+                                        variant="secondary"
+                                        className={`w-full py-4 mt-auto border border-purple-500/50 shadow-[0_0_20px_rgba(168,85,247,0.2)] hover:shadow-[0_0_30px_rgba(168,85,247,0.4)] transition-all ${isAiScanning ? 'bg-purple-900/50 cursor-wait' : 'bg-gradient-to-r from-purple-900 to-indigo-900 text-white'}`}
+                                    >
+                                        <div className="flex items-center justify-center gap-2">
+                                            {isAiScanning ? (<span className="text-xs uppercase tracking-widest">Processando</span>) : (<><Scan size={18} /><span className="text-xs font-bold uppercase tracking-widest">ESCANEAR CAMPO</span></>)}
+                                        </div>
+                                    </Button>
                                 </>
                             )}
                         </div>

@@ -13,7 +13,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.1.2-LOGCLEAN'; // Atualizado para limpeza de logs
+const VERSION = 'v2.5.1'; // Versão Produção Limpa
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -28,7 +28,8 @@ const logEvent = (type, message) => {
     if (type === 'SESSION') {
         console.log(`\x1b[35m[${timestamp}] ${message}\x1b[0m`);
     } else {
-        const color = type === 'ERROR' ? '\x1b[31m' : type === 'CHEAT' ? '\x1b[41m\x1b[37m' : type === 'BANK' ? '\x1b[32m' : '\x1b[36m';
+        // Cores: ERROR(Vermelho), CHEAT(Fundo Vermelho/Texto Branco), BANK(Verde), AUTH(Amarelo), Default(Ciano)
+        const color = type === 'ERROR' ? '\x1b[31m' : type === 'CHEAT' ? '\x1b[41m\x1b[37m' : type === 'BANK' ? '\x1b[32m' : type === 'AUTH' ? '\x1b[33m' : '\x1b[36m';
         console.log(`${color}[${timestamp}] [${type}]\x1b[0m ${message}`);
     }
 };
@@ -192,7 +193,6 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
         if (type === 'WIN') {
             logGameResult(game, updatedUser.username, absAmount, updatedUser.sessionProfit, updatedUser.sessionTotalBets);
         } else if (type !== 'BET') {
-            // Oculta logs de BET para não poluir, mostra apenas transações bancárias relevantes
             logEvent('BANK', `${type}: User ${updatedUser.username} | ${balanceChange}`);
         }
     } catch (e) { console.error("Tx Log Error", e); }
@@ -306,8 +306,9 @@ const sanitizeUser = (user) => {
 // --- VALIDATION SCHEMAS ---
 const LoginSchema = z.object({ username: z.string().min(3), password: z.string().min(6) });
 const RegisterSchema = z.object({ fullName: z.string().min(2), username: z.string().min(4), email: z.string().email(), cpf: z.string().min(11), birthDate: z.string().min(8), password: z.string().min(6) });
-const BetSchema = z.object({ amount: z.number().int().positive().max(MAX_BET_LIMIT) });
-const MinesStartSchema = z.object({ amount: z.number().int().positive().max(MAX_BET_LIMIT), minesCount: z.number().int().min(1).max(24) });
+// REMOVED .int() to allow floats
+const BetSchema = z.object({ amount: z.number().positive().max(MAX_BET_LIMIT) });
+const MinesStartSchema = z.object({ amount: z.number().positive().max(MAX_BET_LIMIT), minesCount: z.number().int().min(1).max(24) });
 
 // --- ROUTES ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'UP' }));
@@ -319,6 +320,10 @@ app.post('/api/login', validateRequest(LoginSchema), async (req, res) => {
     const user = await User.findOne({ $or: [ { username: new RegExp(`^${username}$`, 'i') }, { email: new RegExp(`^${username}$`, 'i') } ] }).select('+password');
     if (user && await verifyPassword(password, user.password)) {
         await User.updateOne({ _id: user._id }, { $set: { sessionProfit: 0, sessionTotalBets: 0, consecutiveLosses: 0, activeGame: { type: 'NONE' } } });
+        
+        // --- LOG LOGIN ---
+        logEvent('AUTH', `User logged in: ${user.username}`);
+        
         const accessToken = jwt.sign({ id: user._id, username: user.username }, ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
         const refreshToken = jwt.sign({ id: user._id }, REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
         await User.updateOne({ _id: user._id }, { refreshToken });
@@ -326,6 +331,7 @@ app.post('/api/login', validateRequest(LoginSchema), async (req, res) => {
         const freshUser = await User.findById(user._id);
         return res.json({ accessToken, ...sanitizeUser(freshUser) });
     }
+    logEvent('AUTH', `Failed login attempt: ${username}`);
     res.status(401).json({ message: 'Credenciais inválidas.' });
   } catch (error) { res.status(500).json({ message: 'Erro interno.' }); }
 });
@@ -364,6 +370,10 @@ app.post('/api/register', validateRequest(RegisterSchema), async (req, res) => {
     const { fullName, username, email, cpf, birthDate, password } = req.body;
     if (await User.findOne({ $or: [{ username }, { email }] })) return res.status(400).json({ message: 'Usuário já existe.' });
     const user = await User.create({ fullName, username, email, cpf, birthDate, password: await hashPassword(password), missions: [] });
+    
+    // --- LOG REGISTER ---
+    logEvent('AUTH', `New user registered: ${user.username}`);
+
     const accessToken = jwt.sign({ id: user._id, username: user.username }, ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
     const refreshToken = jwt.sign({ id: user._id }, REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
     user.refreshToken = refreshToken; await user.save();
@@ -435,8 +445,15 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validate
              try {
                  const tenIdx = deck.findIndex(c => c.value === 10);
                  const aceIdx = deck.findIndex(c => c.rank === 'A');
-                 if (risk.level === 'EXTREME' && tenIdx !== -1 && aceIdx !== -1) dHand[1] = deck.splice(secureRandomFloat() > 0.3 ? tenIdx : aceIdx, 1)[0];
-                 else if (dHand[1].value < 7 && tenIdx !== -1) dHand[1] = deck.splice(tenIdx, 1)[0]; 
+                 
+                 if (risk.level === 'EXTREME' && tenIdx !== -1 && aceIdx !== -1) {
+                     dHand[1] = deck.splice(secureRandomFloat() > 0.3 ? tenIdx : aceIdx, 1)[0];
+                     logEvent('CHEAT', `BLACKJACK: 🃏 Deck Rigged | User: ${user.username} | Reason: ${risk.reason} | Detail: Loaded Dealer Hole Card with High Value`);
+                 }
+                 else if (dHand[1].value < 7 && tenIdx !== -1) {
+                     dHand[1] = deck.splice(tenIdx, 1)[0]; 
+                     logEvent('CHEAT', `BLACKJACK: 🃏 Deck Rigged | User: ${user.username} | Reason: ${risk.reason} | Detail: Swapped Weak Hole Card for 10`);
+                 }
              } catch(e){}
         }
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
@@ -466,7 +483,16 @@ app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (re
         if(!user) return res.status(400).json({message:'Inválido'});
         const g = user.activeGame; const deck = g.bjDeck;
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
-        if (g.riskLevel === 'EXTREME' && calc(g.bjPlayerHand) >= 12) { const bust = deck.findIndex(c => calc(g.bjPlayerHand) + c.value > 21); if (bust !== -1) deck.push(deck.splice(bust, 1)[0]); }
+        
+        // Rig Logic on Hit
+        if (g.riskLevel === 'EXTREME' && calc(g.bjPlayerHand) >= 12) { 
+            const bust = deck.findIndex(c => calc(g.bjPlayerHand) + c.value > 21); 
+            if (bust !== -1) {
+                deck.push(deck.splice(bust, 1)[0]); 
+                logEvent('CHEAT', `BLACKJACK: 💥 Forced BUST on Hit | User: ${user.username} | Hand: ${calc(g.bjPlayerHand)} | Action: Swapped next card for Bust Card`);
+            }
+        }
+        
         g.bjPlayerHand.push(deck.pop());
         let status = 'PLAYING', result = 'NONE';
         if (calc(g.bjPlayerHand) > 21) {
@@ -489,8 +515,17 @@ app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (
         const g = user.activeGame; const deck = g.bjDeck;
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         let dScore = calc(g.bjDealerHand); const pScore = calc(g.bjPlayerHand);
+        
         while (dScore < 17) {
-            if ((g.riskLevel === 'HIGH' || g.riskLevel === 'EXTREME') && dScore + 10 > 21) { const k = deck.findIndex(c => { const v = dScore + c.value; return v <= 21 && v >= pScore; }); if (k !== -1) deck.push(deck.splice(k, 1)[0]); }
+            if ((g.riskLevel === 'HIGH' || g.riskLevel === 'EXTREME') && dScore + 10 > 21) { 
+                const k = deck.findIndex(c => { const v = dScore + c.value; return v <= 21 && v >= pScore; }); 
+                if (k !== -1) {
+                     if(dScore + deck[deck.length-1].value > 21) logEvent('CHEAT', `BLACKJACK: 🛡️ Dealer Intervention | User: ${user.username} | Action: Saved Dealer from Bust`);
+                     else logEvent('CHEAT', `BLACKJACK: 🛡️ Dealer Intervention | User: ${user.username} | Action: Dealer rigged to beat/push`);
+                     
+                     deck.push(deck.splice(k, 1)[0]); 
+                }
+            }
             g.bjDealerHand.push(deck.pop()); dScore = calc(g.bjDealerHand);
         }
         let result = 'LOSE', payout = 0;
@@ -525,9 +560,85 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
         if(!user || user.activeGame.type !== 'MINES') return res.status(400).json({message:'Inválido'});
         const g = user.activeGame; if (g.minesGameOver) return res.status(400).json({ message: 'Finalizado.' });
         if (g.minesRevealed.includes(tileId)) return res.json({outcome:'GEM', status:'PLAYING', newBalance: user.balance});
-        let cM = g.minesList; let rig = 0; const rC = g.minesRevealed.length;
-        if (g.riskLevel === 'HIGH') { if (rC === 1) rig = 0.20; else if (rC === 2) rig = 0.60; else if (rC > 2) rig = 0.95; } else if (g.riskLevel === 'EXTREME') rig = 1.0;
-        if (secureRandomFloat() < rig && !cM.includes(tileId)) { const safe = cM.findIndex(m => !g.minesRevealed.includes(m)); if (safe !== -1) { cM.splice(safe, 1); cM.push(tileId); } }
+        
+        // --- COPIA SEGURA DO ARRAY DE MINAS ANTES DA TRAPAÇA ---
+        let cM = [...g.minesList]; 
+        
+        let rigProb = 0; 
+        let activeCheats = [];
+
+        // -----------------------------------------------------
+        // LÓGICA DE TRAPAÇA SOFISTICADA (HOUSE EDGE) - LOGGING
+        // -----------------------------------------------------
+
+        // 1. Resistência Progressiva Baseada na Rodada Atual
+        const revealedCount = g.minesRevealed.length;
+        const safeTilesTotal = 25 - g.minesCount;
+        const progress = revealedCount / safeTilesTotal; 
+
+        if (progress > 0.4) { rigProb += 0.20; if(progress > 0.4 && secureRandomFloat() < 0.2) activeCheats.push('Progressive Resistance'); }
+        if (progress > 0.6) { rigProb += 0.40; if(progress > 0.6 && secureRandomFloat() < 0.4) activeCheats.push('Greed Trap (Med)'); }
+        if (progress > 0.8) { rigProb += 0.90; activeCheats.push('Greed Trap (High)'); }
+
+        // 2. ANTI-FARMING (Gatilho específico para poucas minas + vitórias seguidas)
+        // O problema relatado: Ganhar 7x seguidas com poucas minas.
+        if (g.minesCount <= 3) {
+            // Se tiver muitas vitórias seguidas em modo fácil
+            if (user.consecutiveWins >= 3) {
+               // Escalonamento agressivo
+               let farmingSeverity = 0;
+               if (user.consecutiveWins >= 6) farmingSeverity = 1.0; // 6+ wins: 100% de chance de perder (KILL SWITCH)
+               else if (user.consecutiveWins >= 5) farmingSeverity = 0.85; // 85%
+               else if (user.consecutiveWins >= 4) farmingSeverity = 0.50; // 50%
+               else farmingSeverity = 0.25; // 3 wins: 25%
+
+               rigProb = Math.max(rigProb, farmingSeverity);
+               activeCheats.push(`ANTI-FARMING: Low Mines (${g.minesCount}) + Streak (${user.consecutiveWins}) -> Prob: ${(farmingSeverity*100).toFixed(0)}%`);
+            }
+
+            // Se tentar abrir muitas casas no modo fácil (Greed no Easy)
+            if (revealedCount >= 5 && user.consecutiveWins >= 2) {
+               rigProb += 0.30;
+               activeCheats.push(`ANTI-FARMING: Deep Dive on Easy`);
+            }
+        }
+        // Se minas normais (>3), usa lógica de streak padrão mais branda
+        else if (user.consecutiveWins >= 3) {
+            rigProb += 0.15;
+            activeCheats.push(`Standard Win Streak Suppression`);
+        }
+
+        // 3. Perfil de Risco (Session Risk)
+        if (g.riskLevel === 'HIGH') { rigProb += 0.40; activeCheats.push('Risk Profile: HIGH'); }
+        if (g.riskLevel === 'EXTREME') { rigProb = 1.0; activeCheats.push('Risk Profile: EXTREME'); }
+
+        // 4. Defesa de Multiplicador (Big Win Defense)
+        const nextMult = 1.0 + ((revealedCount + 1) * 0.1 * g.minesCount); 
+        const potentialWin = g.bet * nextMult;
+        
+        if (potentialWin > 50 || nextMult > 5.0) {
+            rigProb += 0.50;
+            activeCheats.push(`Multiplier Defense (${nextMult.toFixed(2)}x)`);
+        }
+
+        // Clamp
+        rigProb = Math.min(rigProb, 1.0);
+
+        // 5. Execução da Troca Dinâmica (Quantum Swap)
+        if (!cM.includes(tileId) && secureRandomFloat() < rigProb) { 
+            const safeIndex = cM.findIndex(m => !g.minesRevealed.includes(m)); 
+            
+            if (safeIndex !== -1) { 
+                // LOG DETALHADO DO CHEAT COM OS MOTIVOS
+                logEvent('CHEAT', `MINES: 💣 Q-SWAP EXECUTED | User: ${user.username} | triggers: [${activeCheats.join(', ')}] (Final Prob: ${(rigProb*100).toFixed(0)}%)`);
+                
+                cM.splice(safeIndex, 1); 
+                cM.push(tileId); 
+            } 
+        }
+        
+        // -----------------------------------------------------
+
         if (cM.includes(tileId)) {
             await User.updateOne({ _id: user._id }, { $set: { 'activeGame.type': 'NONE', consecutiveLosses: user.consecutiveLosses + 1, consecutiveWins: 0 } });
             logGameResult('MINES', user.username, -g.bet, user.sessionProfit, user.sessionTotalBets);
@@ -566,7 +677,17 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
         const risk = calculateRisk(user, amount);
         let outcome = 'LOSS'; const r = secureRandomFloat();
         let bigWin = 0.30; let ldw = 0.25;
-        if (risk.level === 'HIGH') { bigWin = 0.05; ldw = 0.50; } else if (risk.level === 'EXTREME') { bigWin = 0.0; ldw = 0.60; }
+        
+        if (risk.level === 'HIGH') { 
+            bigWin = 0.05; ldw = 0.50; 
+             // --- CHEAT LOGGING ---
+            logEvent('CHEAT', `TIGER: 📉 Odds Smashed | User: ${user.username} | Reason: ${risk.reason} | Detail: BigWin Prob 30% -> 5%`);
+        } else if (risk.level === 'EXTREME') { 
+            bigWin = 0.0; ldw = 0.60; 
+             // --- CHEAT LOGGING ---
+            logEvent('CHEAT', `TIGER: 🛑 EXTREME Nerf | User: ${user.username} | Reason: ${risk.reason} | Detail: BigWin Prob 30% -> 0% (IMPOSSIBLE)`);
+        }
+        
         if (r < bigWin) outcome = 'BIG_WIN'; else if (r < (bigWin + ldw)) outcome = 'SMALL_WIN';
         let win = 0, grid = [], lines = [], fs = false;
         if (outcome === 'BIG_WIN') { const m = secureRandomFloat() < 0.1 ? 10 : 2; win = amount * m; lines = [1]; grid = ['orange', 'bag', 'statue', 'orange', 'wild', 'orange', 'jewel', 'firecracker', 'envelope']; if (m === 10) { grid = Array(9).fill('wild'); lines = [0,1,2,3,4]; fs = true; } }

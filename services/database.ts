@@ -12,7 +12,7 @@ const getApiUrl = () => {
 };
 
 const API_URL = getApiUrl();
-const CLIENT_VERSION = 'v2.1.0-RELEASE'; 
+const CLIENT_VERSION = 'v2.5.1'; 
 
 let _accessToken: string | null = null;
 
