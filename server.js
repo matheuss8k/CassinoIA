@@ -14,7 +14,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.6.0-SECURE'; // Versão Fortalecida
+const VERSION = 'v2.6.1-FIX'; // Versão Corrigida (CSP)
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -362,14 +362,17 @@ const validateRequest = (schema) => (req, res, next) => {
 
 app.set('trust proxy', 1);
 
-// --- HARDENED SECURITY HEADERS (Manual Implementation) ---
+// --- HARDENED SECURITY HEADERS (CORRIGIDO PARA PERMITIR FONTES E ESTILOS) ---
 app.use((req, res, next) => {
-    res.removeHeader('X-Powered-By'); // Esconde que é Express
-    res.setHeader('X-Content-Type-Options', 'nosniff'); // Previne MIME sniffing
-    res.setHeader('X-Frame-Options', 'DENY'); // Previne Clickjacking
-    res.setHeader('X-XSS-Protection', '1; mode=block'); // Previne XSS simples
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains'); // Força HTTPS
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data:; connect-src 'self'"); // CSP Básico
+    res.removeHeader('X-Powered-By'); 
+    res.setHeader('X-Content-Type-Options', 'nosniff'); 
+    res.setHeader('X-Frame-Options', 'DENY'); 
+    res.setHeader('X-XSS-Protection', '1; mode=block'); 
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    
+    // CORREÇÃO: CSP Permitindo Google Fonts, Imagens e Scripts próprios
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://www.transparenttextures.com; connect-src 'self'");
+    
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
 });
