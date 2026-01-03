@@ -12,7 +12,7 @@ const getApiUrl = () => {
 };
 
 const API_URL = getApiUrl();
-const CLIENT_VERSION = 'v2.5.1'; 
+const CLIENT_VERSION = 'v2.8.1'; 
 
 let _accessToken: string | null = null;
 
@@ -31,25 +31,35 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
     options.headers = headers;
     if (!options.credentials) options.credentials = 'include';
 
-    // Timeout de 15 segundos para evitar loading infinito
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
     options.signal = controller.signal;
 
     try {
         let response = await fetch(url, options);
-        clearTimeout(timeoutId); // Limpa o timer se sucesso
+        clearTimeout(timeoutId); 
 
+        // DETECÇÃO DE SESSÃO DERRUBADA (Single Session)
         if (response.status === 403) {
+            // Tentamos ler o corpo para ver se é o erro específico de kick
+            const clone = response.clone();
             try {
-                // Tenta refresh sem timeout agressivo
+                const errorBody = await clone.json();
+                if (errorBody.code === 'SESSION_KICKED') {
+                    // Dispara evento global para o App.tsx mostrar o modal
+                    window.dispatchEvent(new CustomEvent('session-kicked'));
+                    throw new Error(errorBody.message || "Sessão encerrada.");
+                }
+            } catch(e) { /* ignore JSON parse error */ }
+
+            // Lógica padrão de Refresh Token (se não for kick explícito)
+            try {
                 const refreshResponse = await fetch(`${API_URL}/refresh`, { 
                     method: 'POST',
                     headers: { 'x-client-version': CLIENT_VERSION },
                     credentials: 'include'
                 });
                 
-                // Se o refresh retornar OK, verifica se temos token ou se é nulo
                 if (refreshResponse.ok) {
                     const data = await refreshResponse.json();
                     
@@ -61,7 +71,6 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
                     _accessToken = data.accessToken;
                     const newHeaders = { ...headers, 'Authorization': `Bearer ${_accessToken}` };
                     options.headers = newHeaders;
-                    // Remove signal antigo para nova tentativa
                     const newOptions = { ...options };
                     delete newOptions.signal; 
                     
@@ -82,7 +91,7 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
         if (error.name === 'AbortError') {
             throw new Error("Tempo limite excedido. Verifique sua conexão.");
         }
-        if (error.message.includes("Sessão expirada")) throw error;
+        if (error.message.includes("Sessão expirada") || error.message.includes("Sessão encerrada")) throw error;
         
         if (retries > 0) {
             await new Promise(resolve => setTimeout(resolve, backoff));
@@ -117,7 +126,6 @@ export const DatabaseService = {
           
           const data = await refreshResponse.json();
           
-          // NOVO: Se accessToken for null, consideramos não logado e lançamos erro controlado
           if (!data.accessToken) {
               throw new Error("Não autenticado");
           }

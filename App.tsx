@@ -5,7 +5,8 @@ import { User } from './types';
 import { AuthForm } from './components/AuthForm';
 import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
-import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users, PieChart } from 'lucide-react';
+import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users, PieChart, ShieldAlert } from 'lucide-react';
+import { Button } from './components/UI/Button';
 
 // --- LAZY LOADING ---
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -44,31 +45,19 @@ export const OnlinePlayersCounter = ({ compact = false }: { compact?: boolean })
 
     useEffect(() => {
         // Algoritmo Determinístico baseado no tempo
-        // Garante que todos os usuários vejam praticamente o mesmo número ao mesmo tempo
         const calculateOnlineUsers = () => {
             const now = Date.now();
-            // Onda lenta (Tendência diária/horária)
             const slowWave = Math.sin(now / 6000000); 
-            // Onda média (Variação de minutos)
             const mediumWave = Math.cos(now / 200000);
-            // Ruído rápido (Simula conexões/desconexões em tempo real)
             const fastNoise = Math.sin(now / 5000); 
-
-            // Base: 3850 (Meio de 1200 e 6500)
-            // Amplitude Total aprox: +/- 2650
-            
             const base = 3850;
             const variation = (slowWave * 1500) + (mediumWave * 800) + (fastNoise * 50);
-            
             const val = Math.floor(base + variation);
-            // Clamp para garantir limites
             const finalVal = Math.max(1200, Math.min(6500, val));
-            
             setCount(finalVal);
         };
 
         calculateOnlineUsers();
-        // Atualiza a cada 15 segundos para parecer orgânico mas estável (Sincronizado com AuthForm)
         const interval = setInterval(calculateOnlineUsers, 15000);
         return () => clearInterval(interval);
     }, []);
@@ -233,26 +222,36 @@ const AppContent: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [sessionKicked, setSessionKicked] = useState(false);
   
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Listener Global para Kick de Sessão
+  useEffect(() => {
+      const handleSessionKicked = () => {
+          setSessionKicked(true);
+      };
+      window.addEventListener('session-kicked', handleSessionKicked);
+      return () => window.removeEventListener('session-kicked', handleSessionKicked);
+  }, []);
+
   // --- 1. Verificação de Sessão Inicial (F5) ---
   useEffect(() => {
     const checkSession = async () => {
-        // CORREÇÃO: Tenta restaurar sessão sempre, independente do localStorage.
-        // O Cookie HttpOnly é a fonte de verdade. LocalStorage pode ter sido limpo.
         try {
             const restoredUser = await DatabaseService.restoreSession();
             
             if (restoredUser.vipLevel === undefined) restoredUser.vipLevel = 0;
             setUser(restoredUser);
             
-            // Sincroniza LocalStorage para manter consistência futura
             if (restoredUser.id) localStorage.setItem('casino_userId', restoredUser.id);
-        } catch (error) {
+        } catch (error: any) {
+            // Se o erro for de kick, mostramos o modal, caso contrário só desloga
+            if (error.message && error.message.includes('encerrada')) {
+                setSessionKicked(true);
+            }
             console.warn("Session restore failed", error);
-            // Se falhou, limpa qualquer resquício local
             localStorage.removeItem('casino_userId');
         } finally {
             setIsCheckingSession(false);
@@ -263,13 +262,7 @@ const AppContent: React.FC = () => {
 
   // --- 2. Forçar Sincronização ao Sair de Jogos (Navegação SPA) ---
   useEffect(() => {
-      // Se o usuário estiver logado e navegar para o dashboard ('/'), 
-      // forçamos uma sincronização para ativar o "Auto-Forfeit" do servidor
-      // caso ele tenha saído de um jogo via botão "Voltar" do navegador ou UI.
       if (user && location.pathname === '/') {
-          // Apenas sincroniza se o usuário já estiver autenticado (user não é null)
-          // syncUser usa o token da memória, não precisamos de restoreSession aqui
-          // pois o usuário já está navegando
           if (user.id) {
               DatabaseService.syncUser(user.id).then(updatedUser => {
                   if (updatedUser) setUser(updatedUser);
@@ -282,13 +275,15 @@ const AppContent: React.FC = () => {
     if (userData.vipLevel === undefined) userData.vipLevel = 0;
     localStorage.setItem('casino_userId', userData.id);
     setUser(userData);
+    setSessionKicked(false); // Reset kick state on fresh login
     navigate('/');
   };
 
   const handleLogout = () => {
-    DatabaseService.logout(); // Limpa cookie e token
+    DatabaseService.logout(); 
     localStorage.removeItem('casino_userId');
     setUser(null);
+    setSessionKicked(false);
     navigate('/');
   };
 
@@ -312,6 +307,34 @@ const AppContent: React.FC = () => {
           <div className="h-screen w-full bg-slate-950 flex flex-col items-center justify-center text-white">
               <div className="w-16 h-16 border-4 border-casino-gold border-t-transparent rounded-full animate-spin mb-4"></div>
               <p className="text-slate-500 text-xs uppercase tracking-widest font-bold animate-pulse">Iniciando Sistema...</p>
+          </div>
+      );
+  }
+
+  // --- MODAL DE SESSÃO DERRUBADA (Single Session Enforcement) ---
+  if (sessionKicked) {
+      return (
+          <div className="h-screen w-full bg-slate-950 flex items-center justify-center relative p-4">
+              <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
+              <div className="absolute inset-0 bg-red-900/10 backdrop-blur-sm z-0"></div>
+              
+              <div className="bg-slate-900 border border-red-500/50 rounded-3xl p-8 max-w-md w-full shadow-[0_0_50px_rgba(220,38,38,0.3)] relative z-10 text-center animate-bounce-in">
+                  <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/30">
+                      <ShieldAlert size={40} className="text-red-500 animate-pulse" />
+                  </div>
+                  <h2 className="text-2xl font-black text-white mb-2 tracking-tight">Sessão Encerrada</h2>
+                  <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+                      Sua conta foi acessada em outro dispositivo. Por segurança, desconectamos esta sessão.
+                  </p>
+                  <Button 
+                      fullWidth 
+                      variant="danger" 
+                      onClick={handleLogout}
+                      className="py-4 text-sm font-bold uppercase tracking-widest shadow-lg"
+                  >
+                      FAZER LOGIN NOVAMENTE
+                  </Button>
+              </div>
           </div>
       );
   }
