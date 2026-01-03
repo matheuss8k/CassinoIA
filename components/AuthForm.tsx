@@ -9,7 +9,7 @@ interface AuthFormProps {
   onLogin: (user: User) => void;
 }
 
-const APP_VERSION = 'v1.8.0'; // Production Release
+const APP_VERSION = 'v2.1.0-RELEASE'; // Production Release
 
 const FORBIDDEN_USERNAMES = [
   'admin', 'root', 'suporte', 'moderador', 'system', 'sistema', 
