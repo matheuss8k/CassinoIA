@@ -6,8 +6,9 @@ import { CardComponent } from './CardComponent';
 import { GameControls } from './GameControls';
 import { AISuggestion } from './AISuggestion';
 import { DatabaseService } from '../services/database'; 
-import { Info, Lock } from 'lucide-react';
+import { Info, Lock, ShieldCheck } from 'lucide-react';
 import { Notification } from './UI/Notification';
+import { ProvablyFairModal } from './UI/ProvablyFairModal';
 
 interface BlackjackGameProps {
   user: User;
@@ -139,6 +140,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   const [isProcessing, setIsProcessing] = useState(false);
   const [decisionTimer, setDecisionTimer] = useState<number>(10);
   
+  const [showProvablyFair, setShowProvablyFair] = useState(false);
+  const [serverSeedHash, setServerSeedHash] = useState('');
+
   const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
   
   const isMounted = useRef(true);
@@ -164,6 +168,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
                  : game.bjDealerHand;
               setDealerHand(visibleDealer);
           }
+          if (game.publicSeed) setServerSeedHash(game.publicSeed);
           setStatus(GameStatus.Playing);
       }
   }, []); // Run once
@@ -235,6 +240,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         setLastBet(bet);
         setResult(GameResult.None);
         setIsProcessing(false); 
+        
+        // Update Seed
+        if (data.publicSeed) setServerSeedHash(data.publicSeed);
 
         updateUser({ balance: data.newBalance, loyaltyPoints: data.loyaltyPoints });
 
@@ -386,6 +394,15 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
       <Notification message={notifyMsg} onClose={() => setNotifyMsg(null)} />
+      
+      {/* Provably Fair Modal */}
+      <ProvablyFairModal 
+          isOpen={showProvablyFair} 
+          onClose={() => setShowProvablyFair(false)}
+          serverSeedHash={serverSeedHash}
+          clientSeed={user.id}
+          nonce={playerHand.length + dealerHand.length}
+      />
 
       <div className="absolute top-5 md:top-8 left-0 right-0 text-center z-20 pointer-events-none">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]">
@@ -396,7 +413,10 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       <div className="flex-1 w-full max-w-[1600px] flex items-center justify-center gap-2 xl:gap-8 relative p-2 md:p-4 min-h-0 pt-16 md:pt-20">
         <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0">
              <div className="bg-slate-900/80 border border-white/10 rounded-2xl p-6 backdrop-blur-md">
-                <h3 className="text-casino-gold font-bold flex items-center gap-2 mb-4 uppercase tracking-widest text-sm"><Info size={16} /> Regras</h3>
+                <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
+                    <h3 className="text-casino-gold font-bold flex items-center gap-2 uppercase tracking-widest text-sm"><Info size={16} /> Regras</h3>
+                    <button onClick={() => setShowProvablyFair(true)} className="text-green-500 hover:text-green-400 transition-colors" title="Provably Fair"><ShieldCheck size={16} /></button>
+                </div>
                 <ul className="space-y-3 text-sm text-slate-300">
                     <li className="flex justify-between border-b border-white/5 pb-2"><span>Apostas</span><span className="font-bold text-white">R$ {MIN_BET} - R$ {MAX_BET}</span></li>
                     <li className="flex justify-between border-b border-white/5 pb-2"><span>Blackjack</span><span className="font-bold text-white">Paga 3:2</span></li>

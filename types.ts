@@ -60,6 +60,8 @@ export interface ActiveGame {
   minesCount?: number;
   minesRevealed?: number[]; // IDs dos tiles revelados
   minesMultiplier?: number;
+  // Provably Fair Visual
+  publicSeed?: string; 
 }
 
 export interface User {

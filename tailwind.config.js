@@ -1,8 +1,12 @@
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
     "./index.html",
-    "./**/*.{js,ts,jsx,tsx}",
+    "./App.tsx",
+    "./index.tsx",
+    "./components/**/*.{js,ts,jsx,tsx}",
+    "./services/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {
@@ -35,6 +39,10 @@ module.exports = {
           '0%': { transform: 'translateY(-200px) scale(0.5)', opacity: '0' },
           '100%': { transform: 'translateY(0) scale(1)', opacity: '1' },
         },
+        flip: {
+          '0%': { transform: 'rotateY(0)' },
+          '100%': { transform: 'rotateY(180deg)' }
+        },
         pulseGold: {
           '0%, 100%': { boxShadow: '0 0 10px #fbbf24' },
           '50%': { boxShadow: '0 0 25px #fbbf24' },
@@ -54,6 +62,10 @@ module.exports = {
         fall: {
           '0%': { transform: 'translateY(-10vh) rotate(0deg)', opacity: '1' },
           '100%': { transform: 'translateY(120vh) rotate(720deg)', opacity: '0' }
+        },
+        spin: {
+          '0%': { transform: 'rotate(0deg)' },
+          '100%': { transform: 'rotate(360deg)' }
         }
       }
     },

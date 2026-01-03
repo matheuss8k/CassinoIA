@@ -3,8 +3,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { User, GameStatus } from '../types';
 import { DatabaseService } from '../services/database';
 import { Button } from './UI/Button';
-import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull, Loader2 } from 'lucide-react';
+import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull, Loader2, ShieldCheck } from 'lucide-react';
 import { Notification } from './UI/Notification';
+import { ProvablyFairModal } from './UI/ProvablyFairModal';
 
 interface MinesGameProps {
   user: User;
@@ -109,7 +110,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   
   const [mineCount, setMineCount] = useState<number>(3);
   const [bet, setBet] = useState<number>(5);
-  const [betInput, setBetInput] = useState<string>("5.00"); // State to handle input text directly
+  const [betInput, setBetInput] = useState<string>("5.00"); 
 
   const [status, setStatus] = useState<GameStatus>(GameStatus.Idle);
   const [revealedCount, setRevealedCount] = useState<number>(0);
@@ -124,6 +125,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   [mineCount, revealedCount]);
 
   const [showInfo, setShowInfo] = useState<boolean>(false);
+  const [showProvablyFair, setShowProvablyFair] = useState<boolean>(false);
+  const [serverSeedHash, setServerSeedHash] = useState<string>(''); // NEW: Hash Visual
+
   const [aiSuggestion, setAiSuggestion] = useState<number | null>(null);
   const [isAiScanning, setIsAiScanning] = useState<boolean>(false);
   const [cashoutWin, setCashoutWin] = useState<number | null>(null);
@@ -155,6 +159,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
           setStatus(GameStatus.Playing);
           setCurrentMultiplier(savedGame.minesMultiplier || 1.0);
           
+          if (savedGame.publicSeed) setServerSeedHash(savedGame.publicSeed);
+
           const restoredGrid: Tile[] = Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' }));
           
           let rCount = 0;
@@ -222,7 +228,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
       const val = e.target.value;
       
       // Regex para permitir digitação livre mas limitar formato:
-      // Aceita vazio, números inteiros ou decimais até 2 casas
       if (val === '' || /^\d+(\.\d{0,2})?$/.test(val)) {
           setBetInput(val);
           const numVal = parseFloat(val);
@@ -267,11 +272,14 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     updateUser({ balance: currentBalance - finalBet });
 
     try {
-        const response = await DatabaseService.minesStart(user.id, finalBet, mineCount);
+        const response: any = await DatabaseService.minesStart(user.id, finalBet, mineCount);
         if(!isMounted.current) return;
 
         setStatus(GameStatus.Playing);
         updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
+        
+        // VISUAL PROVABLY FAIR
+        if (response.publicSeed) setServerSeedHash(response.publicSeed);
 
         const newGrid = Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' as const }));
         setGrid(newGrid);
@@ -293,7 +301,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const handleTileClick = async (index: number) => {
     if (status !== GameStatus.Playing || grid[index].isRevealed || isProcessing || loadingTileId !== null) return;
 
-    // IMMEDIATE FEEDBACK: Visual "Loading" state on specific tile
+    // IMMEDIATE FEEDBACK
     setLoadingTileId(index);
     if (aiSuggestion !== null) setAiSuggestion(null);
 
@@ -402,23 +410,15 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
   const adjustBet = (type: 'half' | 'double') => {
     if (status === GameStatus.Playing) return;
-    
     let newVal = bet;
-    
-    if (type === 'half') {
-        newVal = Math.max(MIN_BET, bet / 2);
-    } else if (type === 'double') {
-        // Ensure double doesn't exceed Max Bet or User Balance
+    if (type === 'half') newVal = Math.max(MIN_BET, bet / 2);
+    else if (type === 'double') {
         newVal = bet * 2;
         if (newVal > MAX_BET) newVal = MAX_BET;
         if (newVal > user.balance) newVal = user.balance; 
-        // Ensure it doesn't drop below min if balance is weirdly low (edge case)
         if (newVal < MIN_BET) newVal = MIN_BET;
     }
-    
-    // Fix precision issues (e.g. 10.55 * 2 = 21.1)
     newVal = parseFloat(newVal.toFixed(2));
-    
     setBet(newVal);
     setBetInput(newVal.toFixed(2));
   };
@@ -426,6 +426,15 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   return (
     <div className="w-full min-h-[calc(100vh-80px)] flex flex-col items-center justify-center p-4 relative animate-fade-in pt-16 md:pt-20 pb-0">
         <Notification message={notifyMsg} onClose={() => setNotifyMsg(null)} />
+        
+        {/* Provably Fair Modal */}
+        <ProvablyFairModal 
+            isOpen={showProvablyFair} 
+            onClose={() => setShowProvablyFair(false)}
+            serverSeedHash={serverSeedHash}
+            clientSeed={user.id}
+            nonce={revealedCount}
+        />
 
         <div className="absolute top-5 md:top-8 left-0 right-0 text-center z-20 pointer-events-none">
              <h1 className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]">
@@ -459,7 +468,10 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                         <div className="w-8 h-8 rounded bg-red-500/20 flex items-center justify-center text-red-500"><Bomb size={18} /></div>
                         <span className="font-bold text-white text-lg tracking-tight">Configuração</span>
                     </div>
-                    <button onClick={() => setShowInfo(true)} className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-casino-gold transition-colors border border-white/5"><Info size={16} /></button>
+                    <div className="flex gap-2">
+                        <button onClick={() => setShowProvablyFair(true)} className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-green-500 hover:text-green-400 transition-colors border border-white/5" title="Provably Fair"><ShieldCheck size={16} /></button>
+                        <button onClick={() => setShowInfo(true)} className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-casino-gold transition-colors border border-white/5"><Info size={16} /></button>
+                    </div>
                 </div>
 
                 <div className={`relative p-4 rounded-2xl border transition-all duration-300 overflow-hidden ${status === GameStatus.Playing ? 'bg-slate-900/90 border-casino-gold/60 shadow-[0_0_20px_rgba(251,191,36,0.15)]' : 'bg-slate-950/50 border-white/5'}`}>
@@ -471,7 +483,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     
                     <div className="relative mb-3">
                         <span className={`absolute left-3 top-1/2 -translate-y-1/2 font-bold ${status === GameStatus.Playing ? 'text-casino-gold' : 'text-slate-500'}`}>R$</span>
-                        {/* INPUT MODIFICADO PARA TEXTO COM CONTROLE MANUAL */}
                         <input 
                             type="text" 
                             inputMode="decimal"
@@ -551,7 +562,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                         })}
                     </div>
                 </div>
-                {/* Modals/Popups (Win/Loss) code remains effectively the same */}
                 {cashoutWin !== null && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
                          <div className="relative pointer-events-none">
@@ -597,7 +607,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                                     </div>
                                     <div className="text-center space-y-1 my-2"><h4 className="text-white font-bold text-lg">{isAiScanning ? 'ANALISANDO...' : 'IA PRONTA'}</h4><p className="text-xs text-slate-400 max-w-[200px]">{isAiScanning ? 'Calculando probabilidades de campo seguro...' : 'A IA pode sugerir o próximo campo com maior probabilidade de segurança.'}</p></div>
                                     
-                                    {/* FIX: Variant changed to "secondary" to avoid gold background clash */}
                                     <Button 
                                         onClick={handleAskAi} 
                                         disabled={isAiScanning || aiSuggestion !== null} 

@@ -14,7 +14,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.8.1-STABLE'; // Versão Auditada para Produção
+const VERSION = 'v2.8.2-STABLE'; // Versão Auditada para Produção
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -456,10 +456,31 @@ const connectDB = async () => {
   }
 };
 
+// --- PROVABLY FAIR HELPER ---
 const sanitizeUser = (user) => {
+    // CORREÇÃO: Mapear _id para id antes da remoção para garantir que o frontend receba o ID
     const userObj = user.toObject ? user.toObject() : user;
-    delete userObj.password; delete userObj.refreshToken; delete userObj._id; delete userObj.tokenVersion;
-    if (userObj.activeGame) { delete userObj.activeGame.bjDeck; delete userObj.activeGame.minesList; delete userObj.activeGame.serverSeed; }
+    
+    // Assegura que 'id' existe como string para o frontend (Client Seed)
+    if (!userObj.id && userObj._id) {
+        userObj.id = userObj._id.toString();
+    }
+    
+    // Provably Fair: Gera o Hash do Seed antes de remover o seed real.
+    // Isso permite que o frontend mostre o hash ("Compromisso") sem revelar o segredo.
+    if (userObj.activeGame && userObj.activeGame.serverSeed) {
+        userObj.activeGame.publicSeed = crypto.createHash('sha256').update(userObj.activeGame.serverSeed).digest('hex');
+    }
+    
+    delete userObj.password; 
+    delete userObj.refreshToken; 
+    delete userObj._id; 
+    delete userObj.tokenVersion;
+    if (userObj.activeGame) { 
+        delete userObj.activeGame.bjDeck; 
+        delete userObj.activeGame.minesList; 
+        delete userObj.activeGame.serverSeed; // Remove o seed real para manter o segredo
+    }
     return userObj;
 };
 
@@ -665,7 +686,12 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validate
             await User.updateOne({ _id: req.user.id }, { $set: { previousBet: amount, activeGame: { type: 'BLACKJACK', bet: amount, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: 'PLAYING', riskLevel: risk.level, serverSeed: generateSeed() } } });
         }
         const fU = await User.findById(req.user.id);
-        res.json({ playerHand: pHand, dealerHand: status==='PLAYING'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: fU.balance });
+        // Include public seed in response for provably fair
+        const responseData = { playerHand: pHand, dealerHand: status==='PLAYING'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: fU.balance, publicSeed: null };
+        if (fU.activeGame && fU.activeGame.serverSeed) {
+            responseData.publicSeed = crypto.createHash('sha256').update(fU.activeGame.serverSeed).digest('hex');
+        }
+        res.json(responseData);
     } catch(e) { res.status(400).json({ message: e.message }); }
 });
 
@@ -737,8 +763,12 @@ app.post('/api/mines/start', authenticateToken, checkActionCooldown, validateReq
         const user = await processTransaction(req.user.id, -amount, 'BET', 'MINES');
         const minesSet = new Set(); while(minesSet.size < minesCount) minesSet.add(secureRandomInt(0, 25));
         const risk = calculateRisk(user, amount);
-        await User.updateOne({ _id: req.user.id }, { $set: { previousBet: amount, activeGame: { type: 'MINES', bet: amount, minesCount, minesList: Array.from(minesSet), minesRevealed: [], minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed: generateSeed() } } });
-        res.json({ success: true, newBalance: user.balance });
+        const serverSeed = generateSeed();
+        await User.updateOne({ _id: req.user.id }, { $set: { previousBet: amount, activeGame: { type: 'MINES', bet: amount, minesCount, minesList: Array.from(minesSet), minesRevealed: [], minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed } } });
+        
+        // Return public seed
+        const publicSeed = crypto.createHash('sha256').update(serverSeed).digest('hex');
+        res.json({ success: true, newBalance: user.balance, publicSeed });
     } catch(e) { res.status(400).json({ message: e.message }); }
 });
 
@@ -844,14 +874,33 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
         const user = await processTransaction(req.user.id, -amount, 'BET', 'TIGER');
         const risk = calculateRisk(user, amount);
         let outcome = 'LOSS'; const r = secureRandomFloat();
-        let bigWin = 0.30; let ldw = 0.25;
+        
+        // --- PROBABILITIES ADJUSTMENT (HARDENED) ---
+        let bigWin = 0.08; 
+        let ldw = 0.35;    
+        
+        // === IMPLEMENTAÇÃO: TRAVA DE 10% DE LUCRO SOBRE TOTAL APOSTADO ===
+        // Se o usuário ganhar um BIG_WIN (aprox 10x), o saldo dele não deve exceder 10% de lucro sobre o total apostado.
+        const potentialMaxWin = amount * 10;
+        // Limite de lucro permitido: 10% do total apostado na sessão (Mínimo de R$ 10 de margem)
+        const allowedProfitCap = Math.max(10, user.sessionTotalBets * 0.10); 
+        const projectedProfit = user.sessionProfit + potentialMaxWin;
+
+        if (projectedProfit > allowedProfitCap) {
+            // Se o prêmio máximo estourar o limite de 10%, removemos a chance de Big Win.
+            // Forçamos o jogo a cair em Small Win ou Loss.
+            bigWin = 0.0; 
+            ldw = 0.40; // Aumenta levemente a chance de small win para manter o engajamento sem quebrar a banca
+            logEvent('CHEAT', `TIGER: 📉 Profit Cap 10% | User: ${user.username} | TotalBets: ${user.sessionTotalBets.toFixed(2)} | Action: Blocked Big Win`);
+        }
         
         if (risk.level === 'HIGH') { 
-            bigWin = 0.05; ldw = 0.50; 
-             logEvent('CHEAT', `TIGER: 📉 Odds Smashed | User: ${user.username} | Reason: ${risk.reason} | Detail: BigWin Prob 30% -> 5%`);
+            bigWin = 0.01; 
+            ldw = 0.25;    
+             logEvent('CHEAT', `TIGER: 📉 Odds Smashed | User: ${user.username} | Reason: ${risk.reason} | Detail: BigWin Prob 8% -> 1%`);
         } else if (risk.level === 'EXTREME') { 
-            bigWin = 0.0; ldw = 0.60; 
-             logEvent('CHEAT', `TIGER: 🛑 EXTREME Nerf | User: ${user.username} | Reason: ${risk.reason} | Detail: BigWin Prob 30% -> 0% (IMPOSSIBLE)`);
+            bigWin = 0.0; ldw = 0.15; 
+             logEvent('CHEAT', `TIGER: 🛑 EXTREME Nerf | User: ${user.username} | Reason: ${risk.reason} | Detail: BigWin Prob -> 0% (IMPOSSIBLE)`);
         }
         
         if (r < bigWin) outcome = 'BIG_WIN'; else if (r < (bigWin + ldw)) outcome = 'SMALL_WIN';
@@ -865,8 +914,12 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
         
         await saveGameLog(user._id, 'TIGER', amount, win, { grid, lines, isFullScreen: fs, outcome }, risk.level);
 
+        // Provably Fair: Generate temporary Seed for this spin
+        const serverSeed = generateSeed();
+        const publicSeed = crypto.createHash('sha256').update(serverSeed).digest('hex');
+
         const fU = await User.findById(user._id);
-        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: fU.balance });
+        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: fU.balance, publicSeed });
     } catch(e) { res.status(400).json({message: e.message}); }
 });
 
@@ -891,5 +944,19 @@ app.get('*', (req, res) => {
     });
 });
 
-const startServer = async () => { connectDB(); app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server (${VERSION}) port ${PORT}`)); };
+const startServer = async () => { 
+    await connectDB(); 
+    const server = app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server (${VERSION}) running on port ${PORT}`));
+    
+    server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+            console.error(`\n❌ FATAL ERROR: Port ${PORT} is already in use.`);
+            console.error(`   It seems another instance of the server is running.`);
+            console.error(`   Please stop the other process or change PORT in .env file.\n`);
+            process.exit(1);
+        } else {
+            throw error;
+        }
+    });
+};
 startServer();
