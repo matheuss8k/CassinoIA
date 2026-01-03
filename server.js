@@ -14,7 +14,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.6.1-FIX'; // Versão Corrigida (CSP)
+const VERSION = 'v2.7.0-FORTRESS'; // Versão com Nonces
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -362,16 +362,28 @@ const validateRequest = (schema) => (req, res, next) => {
 
 app.set('trust proxy', 1);
 
-// --- HARDENED SECURITY HEADERS (CORRIGIDO PARA PERMITIR FONTES E ESTILOS) ---
+// --- HARDENED SECURITY HEADERS WITH NONCE (BANK GRADE) ---
 app.use((req, res, next) => {
+    // Gerar Nonce (Número usado uma vez) criptográfico para cada requisição
+    const nonce = crypto.randomBytes(16).toString('base64');
+    res.locals.nonce = nonce;
+
     res.removeHeader('X-Powered-By'); 
     res.setHeader('X-Content-Type-Options', 'nosniff'); 
     res.setHeader('X-Frame-Options', 'DENY'); 
     res.setHeader('X-XSS-Protection', '1; mode=block'); 
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     
-    // CORREÇÃO: CSP Permitindo Google Fonts, Imagens e Scripts próprios
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://www.transparenttextures.com; connect-src 'self'");
+    // CORREÇÃO FINAL: Remoção de 'unsafe-inline' para scripts. Uso de 'nonce-...'
+    // 'style-src' mantém unsafe-inline por necessidade de frameworks CSS modernos, mas scripts estão travados.
+    res.setHeader('Content-Security-Policy', 
+        `default-src 'self'; ` + 
+        `script-src 'self' 'nonce-${nonce}' https://esm.sh; ` + // Nonce permite apenas scripts assinados por nós
+        `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; ` + 
+        `font-src 'self' https://fonts.gstatic.com; ` +
+        `img-src 'self' data: https://www.transparenttextures.com; ` +
+        `connect-src 'self'`
+    );
     
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
@@ -829,21 +841,33 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
     } catch(e) { res.status(400).json({message: e.message}); }
 });
 
+app.use('/assets', express.static(path.join(__dirname, 'dist/assets')));
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// --- SERVE INDEX.HTML NO CACHE ---
+// --- SERVE INDEX.HTML COM NONCE INJECTION ---
 app.get('*', (req, res) => { 
     if (req.path.startsWith('/api')) return res.status(404).json({ message: 'Endpoint não encontrado.' });
+    
     const indexPath = path.join(__dirname, 'dist', 'index.html');
-    if (fs.existsSync(indexPath)) {
+    
+    // Performance: Em produção real, leríamos uma vez e faríamos cache do conteúdo,
+    // mas para garantir a injeção do nonce fresco, lemos ou usamos uma string em memória.
+    fs.readFile(indexPath, 'utf8', (err, htmlData) => {
+        if (err) {
+            console.error('Erro ao ler index.html:', err);
+            return res.status(500).send("Erro interno de servidor.");
+        }
+
+        // INJEÇÃO DE NONCE
+        // Substitui todos os placeholders __NONCE__ pelo nonce gerado nesta requisição
+        const finalHtml = htmlData.replace(/__NONCE__/g, res.locals.nonce);
+
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         res.setHeader('Surrogate-Control', 'no-store');
-        res.sendFile(indexPath); 
-    } else {
-        res.status(500).send("Erro: Build não encontrado. Execute 'npm run build'.");
-    }
+        res.send(finalHtml);
+    });
 });
 
 const startServer = async () => { connectDB(); app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server (${VERSION}) port ${PORT}`)); };
