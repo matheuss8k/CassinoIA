@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { User, GameStatus } from '../types';
 import { DatabaseService } from '../services/database';
 import { Button } from './UI/Button';
-import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull } from 'lucide-react';
+import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull, Loader2 } from 'lucide-react';
 import { Notification } from './UI/Notification';
 
 interface MinesGameProps {
@@ -117,7 +117,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [profit, setProfit] = useState<number>(0);
   const [currentMultiplier, setCurrentMultiplier] = useState<number>(1.0);
   
-  // Otimização: useMemo ao invés de state+useEffect para valor derivado
   const nextMultiplierPreview = useMemo(() => 
     getMinesMultiplierPreview(mineCount, revealedCount + 1), 
   [mineCount, revealedCount]);
@@ -258,6 +257,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const handleTileClick = async (index: number) => {
     if (status !== GameStatus.Playing || grid[index].isRevealed || isProcessing || loadingTileId !== null) return;
 
+    // IMMEDIATE FEEDBACK: Visual "Loading" state on specific tile
     setLoadingTileId(index);
     if (aiSuggestion !== null) setAiSuggestion(null);
 
@@ -467,9 +467,15 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                         {grid.map((tile, index) => {
                             const isSuggested = aiSuggestion === tile.id;
                             const isLocked = status !== GameStatus.Playing || tile.isRevealed || isProcessing || loadingTileId !== null;
+                            const isLoading = loadingTileId === tile.id;
                             return (
-                                <button key={tile.id} disabled={isLocked} onClick={() => handleTileClick(index)} className={`relative w-full h-full rounded-xl transition-all duration-300 transform perspective-1000 group ${tile.isRevealed ? 'bg-slate-800 border-slate-700 cursor-default shadow-inner' : isSuggested ? 'bg-purple-900/40 border-2 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.5)] z-10 scale-105 animate-pulse' : 'bg-gradient-to-br from-slate-700 to-slate-800 border-b-[4px] border-slate-950 hover:-translate-y-1 hover:brightness-110 cursor-pointer shadow-lg active:border-b-0 active:translate-y-0.5'} ${!isLocked && !tile.isRevealed && !isSuggested ? 'hover:shadow-[0_0_10px_rgba(255,255,255,0.05)]' : ''} ${status === GameStatus.GameOver && tile.content === 'mine' && !tile.isRevealed ? 'opacity-50 grayscale' : ''} ${loadingTileId === tile.id ? 'animate-pulse scale-95 opacity-80' : ''} ${isLocked && !tile.isRevealed ? 'cursor-not-allowed opacity-90' : ''}`}>
-                                    {isSuggested && !tile.isRevealed && (<div className="absolute inset-0 flex items-center justify-center animate-bounce"><div className="bg-purple-500/20 p-1.5 rounded-full border border-purple-500/50 backdrop-blur-sm"><Scan size={20} className="text-purple-300" /></div></div>)}
+                                <button key={tile.id} disabled={isLocked} onClick={() => handleTileClick(index)} className={`relative w-full h-full rounded-xl transition-all duration-300 transform perspective-1000 group ${tile.isRevealed ? 'bg-slate-800 border-slate-700 cursor-default shadow-inner' : isSuggested ? 'bg-purple-900/40 border-2 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.5)] z-10 scale-105 animate-pulse' : 'bg-gradient-to-br from-slate-700 to-slate-800 border-b-[4px] border-slate-950 hover:-translate-y-1 hover:brightness-110 cursor-pointer shadow-lg active:border-b-0 active:translate-y-0.5'} ${!isLocked && !tile.isRevealed && !isSuggested ? 'hover:shadow-[0_0_10px_rgba(255,255,255,0.05)]' : ''} ${status === GameStatus.GameOver && tile.content === 'mine' && !tile.isRevealed ? 'opacity-50 grayscale' : ''} ${isLoading ? 'scale-90 opacity-80 ring-2 ring-white/20' : ''} ${isLocked && !tile.isRevealed && !isLoading ? 'cursor-not-allowed opacity-90' : ''}`}>
+                                    {isSuggested && !tile.isRevealed && !isLoading && (<div className="absolute inset-0 flex items-center justify-center animate-bounce"><div className="bg-purple-500/20 p-1.5 rounded-full border border-purple-500/50 backdrop-blur-sm"><Scan size={20} className="text-purple-300" /></div></div>)}
+                                    {isLoading && (
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <Loader2 className="animate-spin text-white/50" size={24} />
+                                        </div>
+                                    )}
                                     <div className={`absolute inset-0 flex items-center justify-center transition-all duration-500 ${tile.isRevealed ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>
                                         {tile.content === 'mine' ? (
                                             <div className="relative animate-bounce"><Bomb size={24} className="text-red-500 drop-shadow-[0_0_10px_rgba(239,68,68,0.8)] md:w-8 md:h-8" />{status === GameStatus.GameOver && tile.isRevealed && (<div className="absolute inset-0 bg-red-500 blur-xl opacity-50 animate-pulse"></div>)}</div>
@@ -477,7 +483,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                                             <div className="relative animate-spin-slow"><Diamond size={24} className="text-cyan-400 drop-shadow-[0_0_15px_rgba(34,211,238,0.8)] md:w-8 md:h-8" /><div className="absolute inset-0 bg-cyan-400 blur-lg opacity-30"></div></div>
                                         ) : null}
                                     </div>
-                                    {!tile.isRevealed && (<div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none"><div className="w-6 h-6 rounded-full bg-white blur-md"></div></div>)}
+                                    {!tile.isRevealed && !isLoading && (<div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none"><div className="w-6 h-6 rounded-full bg-white blur-md"></div></div>)}
                                 </button>
                             );
                         })}

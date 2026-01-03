@@ -220,6 +220,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     if (bet > user.balance) return setNotifyMsg("Saldo insuficiente.");
 
     setIsProcessing(true); 
+    // Feedback imediato sonoro
+    playSound('chip');
     
     // Optimistic Update
     const currentBalance = user.balance;
@@ -242,25 +244,26 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         setPlayerHand([]);
         setDealerHand([]);
 
-        // Sequential Deal Animation
+        // Sequential Deal Animation - ACELERADO (300ms em vez de 550ms)
         const dealSequence = async () => {
              if (!isMounted.current) return;
-             setPlayerHand([pHand[0]]); playSound('card');
-             await new Promise(r => setTimeout(r, 550));
+             playSound('card'); // Som imediato
+             setPlayerHand([pHand[0]]); 
+             await new Promise(r => setTimeout(r, 300));
              
              if (!isMounted.current) return;
              setDealerHand([dHand[0]]); playSound('card');
-             await new Promise(r => setTimeout(r, 550));
+             await new Promise(r => setTimeout(r, 300));
              
              if (!isMounted.current) return;
              setPlayerHand([pHand[0], pHand[1]]); playSound('card');
-             await new Promise(r => setTimeout(r, 550));
+             await new Promise(r => setTimeout(r, 300));
              
              if (!isMounted.current) return;
              setDealerHand([dHand[0], dHand[1]]); playSound('card');
 
              if (data.status === 'GAME_OVER') {
-                 await new Promise(r => setTimeout(r, 600));
+                 await new Promise(r => setTimeout(r, 400));
                  if (!isMounted.current) return;
                  // Reveal dealer hole card if needed
                  if (data.dealerHand[1].isHidden === false && dHand[1].isHidden === true) {
@@ -323,16 +326,16 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
              if (currentDealer.length >= 2) {
                   currentDealer[1] = finalDealerHand[1]; 
                   setDealerHand([...currentDealer]);     
-                  await new Promise(r => setTimeout(r, 800));
+                  await new Promise(r => setTimeout(r, 500));
                   if (!isMounted.current) return;
              }
 
-             // Deal remaining cards
+             // Deal remaining cards - ACELERADO (600ms)
              for (let i = currentDealer.length; i < finalDealerHand.length; i++) {
                   currentDealer.push(finalDealerHand[i]);
                   setDealerHand([...currentDealer]);
                   playSound('card');
-                  await new Promise(r => setTimeout(r, 900));
+                  await new Promise(r => setTimeout(r, 600));
                   if (!isMounted.current) return;
              }
 

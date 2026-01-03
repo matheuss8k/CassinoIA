@@ -259,7 +259,8 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
         updateUser({ balance: currentBalance - bet });
 
         try {
-            const minSpinTime = 1800;
+            // REDUZIDO TEMPO MÍNIMO DE SPIN (1.8s -> 1.0s)
+            const minSpinTime = 1000;
             const startTime = Date.now();
 
             const response = await DatabaseService.tigerSpin(user.id, bet);
