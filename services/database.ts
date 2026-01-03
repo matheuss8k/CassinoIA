@@ -1,23 +1,26 @@
 
 import { User } from '../types';
 
-// --- CORREÇÃO DE CONEXÃO ---
-// Forçamos o uso de caminho relativo.
-// Em desenvolvimento (Vite): O proxy redireciona '/api' -> 'localhost:3000'
-// Em produção (Render): O navegador usa 'https://seusite.com/api' automaticamente.
-const API_URL = '/api';
+// --- CONFIGURAÇÃO ROBUSTA DE URL ---
+// Determina a URL base dinamicamente para evitar referências a localhost em produção.
+const getApiUrl = () => {
+    if (typeof window !== 'undefined') {
+        // Em produção, isso retorna 'https://cassinoia.com/api'
+        return `${window.location.origin}/api`;
+    }
+    return '/api';
+};
 
-const CLIENT_VERSION = 'v2.1.0-RELEASE'; // Deve bater com o servidor
+const API_URL = getApiUrl();
+const CLIENT_VERSION = 'v2.1.0-RELEASE'; 
 
-// Armazenamento do token em memória (Segurança contra XSS)
 let _accessToken: string | null = null;
 
-// --- RETRY LOGIC WITH REFRESH TOKEN ---
-const fetchWithRetry = async (url: string, options: RequestInit, retries = 6, backoff = 1000): Promise<Response> => {
-    // 1. Headers de Segurança e Autenticação
+// --- FETCH WITH TIMEOUT & RETRY ---
+const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, backoff = 1000): Promise<Response> => {
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        'x-client-version': CLIENT_VERSION, // Anti-Bot Handshake
+        'x-client-version': CLIENT_VERSION,
         ...(options.headers as Record<string, string>),
     };
 
@@ -26,19 +29,20 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 6, ba
     }
 
     options.headers = headers;
-    
-    // 2. Garante o envio de Cookies (Refresh Token)
-    if (!options.credentials) {
-        options.credentials = 'include';
-    }
+    if (!options.credentials) options.credentials = 'include';
+
+    // Timeout de 15 segundos para evitar loading infinito
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    options.signal = controller.signal;
 
     try {
         let response = await fetch(url, options);
+        clearTimeout(timeoutId); // Limpa o timer se sucesso
 
-        // Se receber 403 (Forbidden), o token pode ter expirado. Tenta Refresh.
         if (response.status === 403) {
             try {
-                // Refresh também precisa do header de versão e credenciais
+                // Tenta refresh sem timeout agressivo
                 const refreshResponse = await fetch(`${API_URL}/refresh`, { 
                     method: 'POST',
                     headers: { 'x-client-version': CLIENT_VERSION },
@@ -48,38 +52,34 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 6, ba
                 if (refreshResponse.ok) {
                     const data = await refreshResponse.json();
                     _accessToken = data.accessToken;
-                    
-                    // Tenta a requisição original novamente com o novo token
                     const newHeaders = { ...headers, 'Authorization': `Bearer ${_accessToken}` };
                     options.headers = newHeaders;
-                    response = await fetch(url, options);
+                    // Remove signal antigo para nova tentativa
+                    const newOptions = { ...options };
+                    delete newOptions.signal; 
+                    
+                    response = await fetch(url, newOptions);
                 } else {
-                    // Se o refresh falhar, o usuário precisa relogar
                     _accessToken = null;
-                    throw new Error("Sessão expirada. Faça login novamente.");
+                    throw new Error("Sessão expirada.");
                 }
-            } catch (e) {
-                // Falha no refresh
-                throw e;
-            }
+            } catch (e) { throw e; }
         }
 
-        // Trata 502/503/504 (Server Errors / Starting)
         if (response.status >= 502 && response.status <= 504) {
-             if (retries > 0) {
-                 console.log(`Servidor iniciando/ocupado... (${retries} tentativas restantes)`);
-                 throw new Error("Server warming up"); // Força o catch abaixo
-             }
+             throw new Error("Server warming up");
         }
         return response;
     } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error("Tempo limite excedido. Verifique sua conexão.");
+        }
         if (error.message.includes("Sessão expirada")) throw error;
         
         if (retries > 0) {
-            // Backoff exponencial limitado a 4s
-            const nextBackoff = Math.min(backoff * 1.5, 4000);
             await new Promise(resolve => setTimeout(resolve, backoff));
-            return fetchWithRetry(url, options, retries - 1, nextBackoff);
+            return fetchWithRetry(url, options, retries - 1, backoff * 1.5);
         }
         throw error;
     }
@@ -92,32 +92,25 @@ const handleResponse = async (response: Response) => {
     if (!response.ok) throw new Error(data.message || data.details || `Erro (${response.status})`);
     return data;
   } else {
-    if (response.status === 404) throw new Error("Serviço de API não encontrado.");
-    if (response.status >= 500) throw new Error("O servidor está iniciando. Tente novamente.");
+    if (response.status === 404) throw new Error("API Indisponível (404).");
     throw new Error(`Erro desconhecido (${response.status}).`);
   }
 };
 
 export const DatabaseService = {
-  // NOVO: Restaura sessão usando Cookie HttpOnly antes de chamar APIs protegidas
   restoreSession: async (): Promise<User> => {
       try {
-          // 1. Tenta obter um novo Access Token via Cookie HttpOnly
           const refreshResponse = await fetch(`${API_URL}/refresh`, { 
               method: 'POST',
               headers: { 'x-client-version': CLIENT_VERSION },
               credentials: 'include'
           });
-          if (!refreshResponse.ok) throw new Error("Sessão inválida ou expirada");
+          if (!refreshResponse.ok) throw new Error("Sessão inválida");
           
           const data = await refreshResponse.json();
-          _accessToken = data.accessToken; // Salva na memória
+          _accessToken = data.accessToken;
 
-          // 2. Com o token em mão, sincroniza os dados do usuário
-          const syncResponse = await fetchWithRetry(`${API_URL}/user/sync`, {
-              method: 'POST',
-              body: JSON.stringify({}), // Body vazio, ID vem do token
-          });
+          const syncResponse = await fetchWithRetry(`${API_URL}/user/sync`, { method: 'POST', body: JSON.stringify({}) });
           return handleResponse(syncResponse);
       } catch (e) {
           _accessToken = null;
@@ -126,135 +119,80 @@ export const DatabaseService = {
   },
 
   createUser: async (userData: Partial<User>): Promise<User> => {
-    try {
-        const response = await fetchWithRetry(`${API_URL}/register`, {
-            method: 'POST',
-            body: JSON.stringify(userData),
-        });
-        const data = await handleResponse(response);
-        if (data.accessToken) _accessToken = data.accessToken;
-        return data;
-    } catch (error) { throw error; }
+    const response = await fetchWithRetry(`${API_URL}/register`, { method: 'POST', body: JSON.stringify(userData) });
+    const data = await handleResponse(response);
+    if (data.accessToken) _accessToken = data.accessToken;
+    return data;
   },
 
   login: async (username: string, password: string): Promise<User> => {
-    try {
-        const response = await fetchWithRetry(`${API_URL}/login`, {
-            method: 'POST',
-            body: JSON.stringify({ username, password }),
-        });
-        const data = await handleResponse(response);
-        if (data.accessToken) _accessToken = data.accessToken;
-        return data;
-    } catch (error) { throw error; }
+    const response = await fetchWithRetry(`${API_URL}/login`, { method: 'POST', body: JSON.stringify({ username, password }) });
+    const data = await handleResponse(response);
+    if (data.accessToken) _accessToken = data.accessToken;
+    return data;
   },
   
   logout: async () => {
-      try {
-          // Logout não precisa de retry
-          await fetch(`${API_URL}/logout`, { 
-              method: 'POST',
-              headers: { 'x-client-version': CLIENT_VERSION },
-              credentials: 'include'
-          });
-          _accessToken = null;
-      } catch(e) {}
+      await fetch(`${API_URL}/logout`, { method: 'POST', headers: { 'x-client-version': CLIENT_VERSION }, credentials: 'include' });
+      _accessToken = null;
   },
   
   syncUser: async (userId: string) => {
-      const response = await fetchWithRetry(`${API_URL}/user/sync`, {
-          method: 'POST',
-          body: JSON.stringify({ userId }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/user/sync`, { method: 'POST', body: JSON.stringify({ userId }) });
       return handleResponse(response);
   },
 
-  updateBalance: async (userId: string, newBalance: number): Promise<void> => {
-    try {
-        await fetchWithRetry(`${API_URL}/balance`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, newBalance }),
-        });
-    } catch (e) { console.error('Sync error', e); }
+  updateBalance: async (userId: string, newBalance: number) => {
+      await fetchWithRetry(`${API_URL}/balance`, { method: 'POST', body: JSON.stringify({ userId, newBalance }) });
   },
 
-  updateAvatar: async (userId: string, avatarId: string): Promise<{success: boolean, avatarId: string}> => {
-      const response = await fetchWithRetry(`${API_URL}/user/avatar`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, avatarId }),
-      });
+  updateAvatar: async (userId: string, avatarId: string) => {
+      const response = await fetchWithRetry(`${API_URL}/user/avatar`, { method: 'POST', body: JSON.stringify({ userId, avatarId }) });
       return handleResponse(response);
   },
 
-  requestVerification: async (userId: string): Promise<{success: boolean, documentsStatus: string}> => {
-      const response = await fetchWithRetry(`${API_URL}/user/verify`, {
-          method: 'POST',
-          body: JSON.stringify({ userId }),
-      });
+  requestVerification: async (userId: string) => {
+      const response = await fetchWithRetry(`${API_URL}/user/verify`, { method: 'POST', body: JSON.stringify({ userId }) });
       return handleResponse(response);
   },
 
   blackjackDeal: async (userId: string, amount: number) => {
-      const response = await fetchWithRetry(`${API_URL}/blackjack/deal`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, amount }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/blackjack/deal`, { method: 'POST', body: JSON.stringify({ userId, amount }) });
       return handleResponse(response);
   },
 
   blackjackHit: async (userId: string) => {
-      const response = await fetchWithRetry(`${API_URL}/blackjack/hit`, {
-          method: 'POST',
-          body: JSON.stringify({ userId }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/blackjack/hit`, { method: 'POST', body: JSON.stringify({ userId }) });
       return handleResponse(response);
   },
 
   blackjackStand: async (userId: string) => {
-      const response = await fetchWithRetry(`${API_URL}/blackjack/stand`, {
-          method: 'POST',
-          body: JSON.stringify({ userId }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/blackjack/stand`, { method: 'POST', body: JSON.stringify({ userId }) });
       return handleResponse(response);
   },
 
   minesStart: async (userId: string, amount: number, minesCount: number) => {
-      const response = await fetchWithRetry(`${API_URL}/mines/start`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, amount, minesCount }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/mines/start`, { method: 'POST', body: JSON.stringify({ userId, amount, minesCount }) });
       return handleResponse(response);
   },
 
   minesReveal: async (userId: string, tileId: number) => {
-      const response = await fetchWithRetry(`${API_URL}/mines/reveal`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, tileId }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/mines/reveal`, { method: 'POST', body: JSON.stringify({ userId, tileId }) });
       return handleResponse(response);
   },
 
   minesCashout: async (userId: string) => {
-      const response = await fetchWithRetry(`${API_URL}/mines/cashout`, {
-          method: 'POST',
-          body: JSON.stringify({ userId }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/mines/cashout`, { method: 'POST', body: JSON.stringify({ userId }) });
       return handleResponse(response);
   },
 
   tigerSpin: async (userId: string, amount: number) => {
-      const response = await fetchWithRetry(`${API_URL}/tiger/spin`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, amount }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/tiger/spin`, { method: 'POST', body: JSON.stringify({ userId, amount }) });
       return handleResponse(response);
   },
   
   purchaseItem: async (userId: string, itemId: string, cost: number) => {
-      const response = await fetchWithRetry(`${API_URL}/store/purchase`, {
-          method: 'POST',
-          body: JSON.stringify({ userId, itemId, cost }),
-      });
+      const response = await fetchWithRetry(`${API_URL}/store/purchase`, { method: 'POST', body: JSON.stringify({ userId, itemId, cost }) });
       return handleResponse(response);
   }
 };
