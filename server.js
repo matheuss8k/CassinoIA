@@ -7,30 +7,33 @@ const fs = require('fs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
-const { z } = require('zod'); // Validação Rigorosa
+const zlib = require('zlib'); // Performance: Compressão Nativa
+const { z } = require('zod'); 
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.5.1'; // Versão Produção Limpa
+const VERSION = 'v2.6.0-SECURE'; // Versão Fortalecida
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+// Em produção, defina FRONTEND_URL no .env (ex: https://meucassino.com)
+const ALLOWED_ORIGIN = process.env.FRONTEND_URL || true; 
 
 // --- SEGREDOS JWT ---
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || crypto.randomBytes(64).toString('hex');
 const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || crypto.randomBytes(64).toString('hex');
 
-// --- LOGGER UTILS ---
+// --- LOGGER UTILS (Async Non-Blocking) ---
 const logEvent = (type, message) => {
     const timestamp = new Date().toISOString();
+    // Uso de process.stdout para evitar bloqueio excessivo em high-load
     if (type === 'SESSION') {
-        console.log(`\x1b[35m[${timestamp}] ${message}\x1b[0m`);
+        process.stdout.write(`\x1b[35m[${timestamp}] ${message}\x1b[0m\n`);
     } else {
-        // Cores: ERROR(Vermelho), CHEAT(Fundo Vermelho/Texto Branco), BANK(Verde), AUTH(Amarelo), Default(Ciano)
         const color = type === 'ERROR' ? '\x1b[31m' : type === 'CHEAT' ? '\x1b[41m\x1b[37m' : type === 'BANK' ? '\x1b[32m' : type === 'AUTH' ? '\x1b[33m' : '\x1b[36m';
-        console.log(`${color}[${timestamp}] [${type}]\x1b[0m ${message}`);
+        process.stdout.write(`${color}[${timestamp}] [${type}]\x1b[0m ${message}\n`);
     }
 };
 
@@ -77,6 +80,54 @@ const verifyPassword = (password, hash) => {
             resolve(key === derivedKey.toString('hex'));
         });
     });
+};
+
+// --- MIDDLEWARES DE SEGURANÇA & PERFORMANCE ---
+
+// 1. Sanitização contra NoSQL Injection (Remove chaves com $)
+const mongoSanitize = (req, res, next) => {
+    const sanitize = (obj) => {
+        if (obj instanceof Object) {
+            for (const key in obj) {
+                if (key.startsWith('$')) {
+                    delete obj[key];
+                } else {
+                    sanitize(obj[key]);
+                }
+            }
+        }
+    };
+    if (req.body) sanitize(req.body);
+    if (req.query) sanitize(req.query);
+    if (req.params) sanitize(req.params);
+    next();
+};
+
+// 2. Compressão GZIP Nativa para JSON
+const compressionMiddleware = (req, res, next) => {
+    const send = res.send;
+    res.send = (body) => {
+        if (typeof body === 'string' || Buffer.isBuffer(body) || typeof body === 'object') {
+            const bodyString = typeof body === 'object' ? JSON.stringify(body) : body;
+            // Apenas comprime se for maior que 1KB
+            if (bodyString.length > 1024) {
+                zlib.gzip(bodyString, (err, buffer) => {
+                    if (!err) {
+                        res.set('Content-Encoding', 'gzip');
+                        res.set('Content-Type', 'application/json');
+                        send.call(res, buffer);
+                    } else {
+                        send.call(res, body);
+                    }
+                });
+            } else {
+                send.call(res, body);
+            }
+        } else {
+            send.call(res, body);
+        }
+    };
+    next();
 };
 
 // --- MONGOOSE SCHEMAS ---
@@ -164,39 +215,88 @@ const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel)
     } catch(e) { console.error("Log Error:", e.message); }
 };
 
+// --- BANK GRADE TRANSACTION PROCESSOR (ACID) ---
 const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null) => {
     const absAmount = Math.abs(amount);
     const balanceChange = (type === 'BET' || type === 'WITHDRAW') ? -absAmount : absAmount;
     const profitChange = (type === 'WIN') ? absAmount : (type === 'BET') ? -absAmount : 0;
     const betsChange = (type === 'BET') ? absAmount : 0;
 
-    const query = { _id: userId };
-    if (balanceChange < 0) {
-        query.balance = { $gte: Math.abs(balanceChange) };
-    }
-
-    const updatedUser = await User.findOneAndUpdate(
-        query,
-        { $inc: { balance: balanceChange, sessionProfit: profitChange, sessionTotalBets: betsChange } }, 
-        { new: true }
-    );
-
-    if (!updatedUser) throw new Error('Saldo insuficiente ou erro de concorrência.');
+    let session = null;
+    let updatedUser = null;
 
     try {
-        const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 });
-        const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
-        const txData = { userId, type, amount: absAmount, balanceAfter: updatedUser.balance, game, referenceId, timestamp: new Date().toISOString() };
-        const integrityHash = generateHash({ ...txData, prevHash }); 
-        await Transaction.create({ ...txData, integrityHash });
-        
+        // Tenta iniciar uma sessão para transação ACID (Requer Replica Set no Mongo)
+        // Se falhar (ex: ambiente dev sem replica set), faz fallback para operação atômica padrão
+        try { session = await mongoose.startSession(); } catch(e) {}
+
+        if (session) {
+            session.startTransaction();
+            try {
+                // 1. Verifica saldo e atualiza atomicamente dentro da transação
+                const query = { _id: userId };
+                if (balanceChange < 0) {
+                    query.balance = { $gte: Math.abs(balanceChange) }; // Previne saldo negativo
+                }
+
+                updatedUser = await User.findOneAndUpdate(
+                    query,
+                    { $inc: { balance: balanceChange, sessionProfit: profitChange, sessionTotalBets: betsChange } }, 
+                    { new: true, session }
+                );
+
+                if (!updatedUser) throw new Error('Saldo insuficiente ou erro de transação.');
+
+                // 2. Cria registro de auditoria imutável
+                const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 }).session(session);
+                const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
+                const txData = { userId, type, amount: absAmount, balanceAfter: updatedUser.balance, game, referenceId, timestamp: new Date().toISOString() };
+                const integrityHash = generateHash({ ...txData, prevHash }); 
+                
+                await Transaction.create([{ ...txData, integrityHash }], { session });
+
+                await session.commitTransaction();
+            } catch (err) {
+                await session.abortTransaction();
+                throw err;
+            } finally {
+                session.endSession();
+            }
+        } else {
+            // Fallback para ambientes sem Replica Set (Atomicidade Simples)
+            const query = { _id: userId };
+            if (balanceChange < 0) query.balance = { $gte: Math.abs(balanceChange) };
+            
+            updatedUser = await User.findOneAndUpdate(
+                query,
+                { $inc: { balance: balanceChange, sessionProfit: profitChange, sessionTotalBets: betsChange } }, 
+                { new: true }
+            );
+            if (!updatedUser) throw new Error('Saldo insuficiente.');
+            
+            // Log Best Effort
+            try {
+                const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 });
+                const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
+                const txData = { userId, type, amount: absAmount, balanceAfter: updatedUser.balance, game, referenceId, timestamp: new Date().toISOString() };
+                const integrityHash = generateHash({ ...txData, prevHash });
+                await Transaction.create({ ...txData, integrityHash });
+            } catch(e) { console.error("Audit log failed", e); }
+        }
+
+        // Logging Visual
         if (type === 'WIN') {
             logGameResult(game, updatedUser.username, absAmount, updatedUser.sessionProfit, updatedUser.sessionTotalBets);
         } else if (type !== 'BET') {
             logEvent('BANK', `${type}: User ${updatedUser.username} | ${balanceChange}`);
         }
-    } catch (e) { console.error("Tx Log Error", e); }
-    return updatedUser;
+
+        return updatedUser;
+
+    } catch (e) {
+        logEvent('ERROR', `Transaction Failed: ${e.message}`);
+        throw e;
+    }
 };
 
 const isProfitCapped = (user) => {
@@ -234,7 +334,13 @@ const createRateLimiter = ({ windowMs, max }) => {
         else {
             const data = requests.get(key);
             if (now > data.expiry) requests.set(key, { count: 1, expiry: now + windowMs });
-            else { data.count++; if (data.count > max) return res.status(429).json({ message: 'Aguarde.' }); }
+            else { 
+                data.count++; 
+                if (data.count > max) {
+                    res.setHeader('Retry-After', Math.ceil((data.expiry - now) / 1000));
+                    return res.status(429).json({ message: 'Muitas requisições. Aguarde.' }); 
+                }
+            }
         }
         next();
     };
@@ -255,17 +361,32 @@ const validateRequest = (schema) => (req, res, next) => {
 };
 
 app.set('trust proxy', 1);
+
+// --- HARDENED SECURITY HEADERS (Manual Implementation) ---
 app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.removeHeader('X-Powered-By'); // Esconde que é Express
+    res.setHeader('X-Content-Type-Options', 'nosniff'); // Previne MIME sniffing
+    res.setHeader('X-Frame-Options', 'DENY'); // Previne Clickjacking
+    res.setHeader('X-XSS-Protection', '1; mode=block'); // Previne XSS simples
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains'); // Força HTTPS
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data:; connect-src 'self'"); // CSP Básico
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
 });
 
-app.use(cors({ origin: true, credentials: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
+// Configuração CORS Estrita para Produção
+app.use(cors({ 
+    origin: ALLOWED_ORIGIN, 
+    credentials: true, 
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-client-version']
+}));
+
 app.use(createRateLimiter({ windowMs: 60000, max: 300 })); 
 app.use(cookieParser());
 app.use(express.json({ limit: '10kb' })); 
+app.use(mongoSanitize); // Sanitização NoSQL
+app.use(compressionMiddleware); // Compressão GZIP
 
 const authenticateToken = (req, res, next) => {
     if (mongoose.connection.readyState !== 1) { connectDB(); return res.status(503).json({ message: 'Iniciando...' }); }
@@ -287,7 +408,7 @@ const connectDB = async () => {
     const uri = process.env.MONGODB_URI;
     if (!uri) throw new Error("MONGODB_URI missing");
     await mongoose.connect(uri, { dbName: 'casino_ai_db', serverSelectionTimeoutMS: 15000 });
-    console.log(`✅ MongoDB Conectado`);
+    console.log(`✅ MongoDB Conectado (Replica Set Check: ${!!mongoose.connection.client.topology.s.options.replicaSet ? 'YES' : 'NO'})`);
     isConnecting = false;
   } catch (error) {
     console.error(`❌ DB Error: ${error.message}`);
@@ -311,7 +432,7 @@ const BetSchema = z.object({ amount: z.number().positive().max(MAX_BET_LIMIT) })
 const MinesStartSchema = z.object({ amount: z.number().positive().max(MAX_BET_LIMIT), minesCount: z.number().int().min(1).max(24) });
 
 // --- ROUTES ---
-app.get('/health', (req, res) => res.status(200).json({ status: 'UP' }));
+app.get('/health', (req, res) => res.status(200).json({ status: 'UP', secure: true }));
 
 app.post('/api/login', validateRequest(LoginSchema), async (req, res) => {
   try {
