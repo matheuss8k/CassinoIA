@@ -15,4 +15,20 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // Otimização de Build para Produção
+    target: 'esnext',
+    minify: 'esbuild', // Mais rápido que terser
+    cssCodeSplit: true,
+    rollupOptions: {
+      output: {
+        // Separa bibliotecas de terceiros em arquivos de cache separados
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-ui': ['lucide-react'],
+          'game-utils': ['./services/gameLogic.ts', './services/database.ts']
+        }
+      }
+    }
+  }
 });

@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Card, Suit } from '../types';
 
@@ -16,15 +17,16 @@ export const CardComponent: React.FC<CardProps> = ({ card, index }) => {
 
   return (
     <div 
-      className="relative w-20 h-28 sm:w-24 sm:h-36 perspective-1000 animate-deal-card opacity-0 fill-mode-forwards"
+      className="relative w-20 h-28 sm:w-24 sm:h-36 perspective-1000 animate-deal-card opacity-0 fill-mode-forwards will-change-transform"
       style={style}
     >
       {/* 
          Container: Controls the flip state.
          Use inline style for transform to prevent Tailwind class conflicts.
+         Added gpu-accelerated class for smoother animation.
       */}
       <div 
-        className="relative w-full h-full transition-transform duration-500 preserve-3d"
+        className="relative w-full h-full transition-transform duration-500 preserve-3d gpu-accelerated"
         style={{ transform: card.isHidden ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
       >
         

@@ -223,7 +223,7 @@ interface ProtectedRouteProps {
     onOpenWallet: () => void;
     children: React.ReactNode;
 }
-const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ user, onLogout, onOpenWallet, children }) => {
+const ProtectedRoute = ({ user, onLogout, onOpenWallet, children }: ProtectedRouteProps) => {
     if (!user) return <Navigate to="/" replace />;
     return <AppLayout user={user} onLogout={onLogout} onOpenWallet={onOpenWallet}>{children}</AppLayout>;
 };
