@@ -256,27 +256,39 @@ const calculateRisk = (user, currentBet) => {
     let reason = '';
     let level = 'NORMAL';
 
-    // Se bateu no teto de lucro, é Rigged automaticamente (Sobrescreve tudo)
-    // CRITICIDADE: HARD CAP DE 15%
+    // 1. HARD CAP DE 15% (Prioridade Máxima)
     if (isProfitCapped(user)) {
         return { isRigged: true, level: 'EXTREME', reason: 'Profit Cap 15% Breach' };
     }
 
     try {
-        // Regra 1: Streak Randomizada (Sofisticação)
-        if (user.consecutiveWins >= 2) {
+        // --- DEFESA ANTI-MARTINGALE (Dobrar na Perda) ---
+        // O jogador perdeu várias vezes e agora dobrou a aposta para recuperar.
+        if (user.consecutiveLosses >= 3 && user.previousBet > 0 && currentBet >= user.previousBet * 1.8) {
+             isRigged = true;
+             level = 'HIGH';
+             reason = 'Martingale Defense (Chase Loss)';
+        }
+        
+        // --- DEFESA PAROLI (Dobrar na Vitória) ---
+        // O jogador ganhou e agora dobrou a aposta (Alavancagem / Greed).
+        // Isso é perigoso para a casa, pois permite vitórias exponenciais.
+        else if (user.consecutiveWins >= 1 && user.previousBet > 0 && currentBet >= user.previousBet * 1.8) {
+             isRigged = true;
+             level = 'HIGH'; // Aumenta risco para quebrar a sequência
+             reason = 'Paroli Defense (Greed Trap)';
+        }
+        
+        // --- OUTRAS REGRAS ---
+        
+        // Regra 3: Streak Randomizada (Sofisticação)
+        else if (user.consecutiveWins >= 2) {
             const streakProb = Math.min(0.9, (user.consecutiveWins - 1) * 0.30);
             if (secureRandomFloat() < streakProb) {
                 isRigged = true; 
                 reason = `Kin Streak Protocol (W:${user.consecutiveWins})`; 
             }
         }
-        
-        // Regra 2: Anti-Martingale
-        else if (user.consecutiveLosses >= 4 && user.previousBet > 0 && currentBet >= user.previousBet * 2.0) { isRigged = true; reason = 'Anti-Martingale Protocol'; }
-        
-        // Regra 3: ROI Protection
-        else if (user.totalDeposits > 0 && user.balance > 100 && user.balance > (user.totalDeposits * 2.0)) { isRigged = true; reason = `ROI Guard`; }
         
         // Regra 4: All-In Trap (Apostou mais de 50% do saldo atual)
         else if (user.balance > 0 && currentBet >= (user.balance * 0.5)) { isRigged = true; reason = 'Desperation Trap'; }
@@ -285,7 +297,8 @@ const calculateRisk = (user, currentBet) => {
         else if (user.previousBet >= 10 && currentBet >= user.previousBet * 8) { isRigged = true; reason = 'Sniper Bet'; }
 
         if (isRigged) {
-            level = 'HIGH';
+            // Se já não foi setado como EXTREME ou HIGH
+            if (level === 'NORMAL') level = 'HIGH';
         }
 
     } catch (err) { return { isRigged: false, level: 'NORMAL' }; }
@@ -538,7 +551,7 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validate
         // HOUSE EDGE BLACKJACK:
         // Se EXTREME (15% Cap) ou HIGH, o Dealer começa com vantagem clara.
         if (risk.isRigged) {
-             logEvent('CHEAT', `Blackjack > Rigged Deal | User: ${user.username}`);
+             logEvent('CHEAT', `Blackjack > Rigged Deal (${risk.reason}) | User: ${user.username}`);
              try {
                  const tenIdx = deck.findIndex(c => c.value === 10);
                  const aceIdx = deck.findIndex(c => c.rank === 'A');
@@ -569,19 +582,23 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validate
             else { result = 'BLACKJACK'; payout = amount * 2.5; }
         }
 
+        // SAVE GAME STATE & PREVIOUS BET
         if (status === 'GAME_OVER') {
             if (payout > 0) {
                 await processTransaction(userId, payout, 'WIN', 'BLACKJACK');
             } else {
                 if (result !== 'PUSH') logGameResult('BLACKJACK', user.username, -amount, user.sessionProfit, user.sessionTotalBets);
             }
-            await User.updateOne({ _id: userId }, { $set: { activeGame: { type: 'NONE' } } });
+            await User.updateOne({ _id: userId }, { $set: { activeGame: { type: 'NONE' }, previousBet: amount } });
             await GameLog.create({ userId, game: 'BLACKJACK', bet: amount, payout, profit: payout - amount, resultSnapshot: { pHand, dHand }, riskLevel, serverSeed });
         } else {
             await User.updateOne({ _id: userId }, { 
-                $set: { activeGame: { 
-                    type: 'BLACKJACK', bet: amount, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: 'PLAYING', riskLevel, serverSeed
-                }} 
+                $set: { 
+                    previousBet: amount, // Grava a aposta para análise futura
+                    activeGame: { 
+                        type: 'BLACKJACK', bet: amount, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: 'PLAYING', riskLevel, serverSeed
+                    }
+                } 
             });
         }
 
@@ -711,11 +728,14 @@ app.post('/api/mines/start', authenticateToken, checkActionCooldown, validateReq
         const serverSeed = generateSeed();
 
         await User.updateOne({ _id: req.user.id }, {
-            $set: { activeGame: { 
-                type: 'MINES', bet: amount, minesCount, 
-                minesList: Array.from(minesSet), minesRevealed: [], 
-                minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed
-            }}
+            $set: { 
+                previousBet: amount,
+                activeGame: { 
+                    type: 'MINES', bet: amount, minesCount, 
+                    minesList: Array.from(minesSet), minesRevealed: [], 
+                    minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed
+                }
+            }
         });
         res.json({ success: true, newBalance: user.balance });
     } catch(e) { res.status(400).json({ message: e.message }); }
@@ -733,25 +753,26 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
         let currentMines = g.minesList;
         const isFarm = g.minesCount <= 3; 
         let rigProb = 0;
+        const revealedCount = g.minesRevealed.length;
         
-        // HOUSE EDGE MINES - REFEITO (LADDER ESPECÍFICA)
-        if (isFarm && user.consecutiveWins >= 3) rigProb = 0.5;
-        
-        if (g.riskLevel === 'HIGH' || g.riskLevel === 'EXTREME') {
-            const revealedCount = g.minesRevealed.length;
-            // ESCADA DE RISCO ATUALIZADA
-            // 1º Clique: 20%
-            if (revealedCount === 0) rigProb = 0.20;
-            // 2º Clique: 30%
-            else if (revealedCount === 1) rigProb = 0.30;
-            // 3º Clique: 60%
-            else if (revealedCount === 2) rigProb = 0.60;
-            // 4º Clique em diante: 90%
-            else rigProb = 0.90;
+        // --- DEFESA "PAROLI" (ANTI-MARTINGALE) SOFISTICADA ---
+        // Se o risco for HIGH (Greed Trap detectada), permitimos 1 ou 2 cliques seguros para
+        // dar a sensação de vitória, e depois aumentamos drasticamente o risco.
+        if (g.riskLevel === 'HIGH') {
+            if (revealedCount === 0) rigProb = 0.0; // 1º Clique: Seguro (Hook)
+            else if (revealedCount === 1) rigProb = 0.20; // 2º Clique: Baixo Risco
+            else if (revealedCount === 2) rigProb = 0.60; // 3º Clique: A Armadilha se fecha
+            else rigProb = 0.95; // 4º+ Clique: Morte Súbita
+            
+            // logEvent('CHEAT', `Mines > Paroli Defense | Step: ${revealedCount+1} | Prob: ${rigProb}`);
+        } 
+        else if (g.riskLevel === 'EXTREME') {
+            // HARD CAP: Sem piedade
+            rigProb = 1.0;
+        } else {
+            // Risco Normal (Escada progressiva suave)
+            if (isFarm && user.consecutiveWins >= 3) rigProb = 0.4;
         }
-        
-        // Se estiver no Cap de 15%, é 100% bomba se possível (Illusion of Choice)
-        if (g.riskLevel === 'EXTREME') rigProb = 1.0;
 
         // Algoritmo Quantum Mine
         if (secureRandomFloat() < rigProb && !currentMines.includes(tileId)) {
@@ -760,13 +781,9 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
                 currentMines.splice(safeIdx, 1); 
                 currentMines.push(tileId); 
                 
-                const logMsg = g.riskLevel === 'EXTREME' ? 'Illusion of Choice' : 'Quantum Mine';
-                logEvent('CHEAT', `Mines > ${logMsg} | User: ${user.username} | Click #${g.minesRevealed.length + 1}`); 
+                const logMsg = g.riskLevel === 'EXTREME' ? 'Illusion of Choice' : g.riskLevel === 'HIGH' ? 'Paroli Trap' : 'Quantum Mine';
+                logEvent('CHEAT', `Mines > ${logMsg} | User: ${user.username} | Click #${revealedCount + 1}`); 
             }
-        } else if (g.riskLevel === 'HIGH') {
-             // Log genérico se estiver marcado como High Risk mas não moveu bomba agora
-             // (Para manter rastreio que está no protocolo)
-             // logEvent('CHEAT', `Mines > Landmine Protocol Active`);
         }
 
         if (currentMines.includes(tileId)) {
@@ -817,9 +834,11 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
         let ldwProb = 0.25;    // 25% chance of LDW (Small Fake Win)
 
         if (risk.level === 'HIGH') {
-            bigWinProb = 0.10;
-            ldwProb = 0.40; // Increase fake wins to keep engagement while draining
-            logEvent('CHEAT', `Tigrinho > Weight Reduction | User: ${user.username}`);
+            // Se for Paroli Defense (Dobrou na vitória), cortamos a Big Win drasticamente
+            // E aumentamos o LDW para drenar o saldo mantendo a ilusão
+            bigWinProb = 0.05; // Quase impossível ganhar de verdade
+            ldwProb = 0.50; // Alta chance de vitória falsa (ganha menos que a aposta)
+            logEvent('CHEAT', `Tigrinho > High Risk (${risk.reason}) | User: ${user.username}`);
         } else if (risk.level === 'EXTREME') {
             bigWinProb = 0.0; // No real profit allowed
             ldwProb = 0.60; // Heavy fake wins to drain slowly
@@ -875,7 +894,8 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
             for(let i=0; i<9; i++) grid.push(syms[secureRandomInt(0, syms.length)]);
             
             // Inject Near Miss if High Risk
-            if (risk.level === 'HIGH' && secureRandomFloat() < 0.3) {
+            // Se o jogador dobrou a aposta e perdeu, mostramos 2 Wilds para parecer "quase"
+            if (risk.level === 'HIGH' && secureRandomFloat() < 0.4) {
                 // Two wilds in middle
                 grid[3] = 'orange'; grid[4] = 'wild'; grid[5] = 'wild';
             }
@@ -885,14 +905,14 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
             await processTransaction(user._id, totalWin, 'WIN', 'TIGER');
             // Só conta como vitória consecutiva se for lucro real
             if (outcome === 'BIG_WIN') {
-                await User.updateOne({ _id: user._id }, { $inc: { consecutiveWins: 1 } });
+                await User.updateOne({ _id: user._id }, { $inc: { consecutiveWins: 1 }, previousBet: amount });
             } else {
                 // LDW reseta win streak ou mantém? Geralmente mantém para o usuário achar que está ganhando
                 // Mas matematicamente é loss. Vamos resetar para não ativar triggers de "sorte".
-                await User.updateOne({ _id: user._id }, { $set: { consecutiveWins: 0 } });
+                await User.updateOne({ _id: user._id }, { $set: { consecutiveWins: 0 }, previousBet: amount });
             }
         } else {
-            await User.updateOne({ _id: user._id }, { $inc: { consecutiveLosses: 1 } });
+            await User.updateOne({ _id: user._id }, { $inc: { consecutiveLosses: 1 }, previousBet: amount });
             // LOG DA PERDA (Spin vazio)
             logGameResult('TIGER', user.username, -amount, user.sessionProfit, user.sessionTotalBets);
         }
