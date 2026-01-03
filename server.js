@@ -13,7 +13,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.1.0-RELEASE'; // VERSÃO DE PRODUÇÃO (HARD ROI CAP)
+const VERSION = 'v2.1.1-LOGFIX'; // Atualizado para correção de logs
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -147,6 +147,22 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 const GameLog = mongoose.model('GameLog', gameLogSchema);
 const User = mongoose.model('User', userSchema);
 
+// --- HELPER: SAVE GAME LOG ---
+const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel) => {
+    try {
+        await GameLog.create({
+            userId,
+            game,
+            bet,
+            payout,
+            profit: payout - bet,
+            resultSnapshot,
+            riskLevel,
+            timestamp: new Date()
+        });
+    } catch(e) { console.error("Log Error:", e.message); }
+};
+
 const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null) => {
     const absAmount = Math.abs(amount);
     const balanceChange = (type === 'BET' || type === 'WITHDRAW') ? -absAmount : absAmount;
@@ -172,8 +188,9 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
         const txData = { userId, type, amount: absAmount, balanceAfter: updatedUser.balance, game, referenceId, timestamp: new Date().toISOString() };
         const integrityHash = generateHash({ ...txData, prevHash }); 
         await Transaction.create({ ...txData, integrityHash });
+        
         if (type === 'WIN') logGameResult(game, updatedUser.username, absAmount, updatedUser.sessionProfit, updatedUser.sessionTotalBets);
-        else if (type !== 'BET') logEvent('BANK', `${type}: User ${updatedUser.username} | ${balanceChange}`);
+        else logEvent('BANK', `${type}: User ${updatedUser.username} | ${balanceChange}`); // Habilitado para BET também
     } catch (e) { console.error("Tx Log Error", e); }
     return updatedUser;
 };
@@ -311,8 +328,6 @@ app.post('/api/login', validateRequest(LoginSchema), async (req, res) => {
 
 app.post('/api/refresh', async (req, res) => {
     const cookies = req.cookies;
-    
-    // CORREÇÃO: Retorna 200 com null em vez de 401 para evitar erro no console ao iniciar
     if (!cookies?.jwt) return res.json({ accessToken: null });
     
     if (mongoose.connection.readyState !== 1) { connectDB(); return res.sendStatus(503); }
@@ -428,6 +443,10 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validate
         if (status === 'GAME_OVER') {
             if (payout > 0) await processTransaction(req.user.id, payout, 'WIN', 'BLACKJACK');
             else if (result !== 'PUSH') logGameResult('BLACKJACK', user.username, -amount, user.sessionProfit, user.sessionTotalBets);
+            
+            // SAVE LOG
+            await saveGameLog(user._id, 'BLACKJACK', amount, payout, { result, pScore, dScore }, risk.level);
+            
             await User.updateOne({ _id: req.user.id }, { $set: { activeGame: { type: 'NONE' }, previousBet: amount } });
         } else {
             await User.updateOne({ _id: req.user.id }, { $set: { previousBet: amount, activeGame: { type: 'BLACKJACK', bet: amount, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: 'PLAYING', riskLevel: risk.level, serverSeed: generateSeed() } } });
@@ -450,6 +469,9 @@ app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (re
             status = 'GAME_OVER'; result = 'BUST';
             await User.updateOne({ _id: user._id }, { $set: { activeGame: { type: 'NONE' }, consecutiveLosses: user.consecutiveLosses + 1, consecutiveWins: 0 } });
             logGameResult('BLACKJACK', user.username, -g.bet, user.sessionProfit, user.sessionTotalBets);
+            
+            // SAVE LOG (BUST)
+            await saveGameLog(user._id, 'BLACKJACK', g.bet, 0, { result, hand: g.bjPlayerHand }, g.riskLevel);
         } else await User.updateOne({ _id: user._id }, { $set: { 'activeGame.bjPlayerHand': g.bjPlayerHand, 'activeGame.bjDeck': deck } });
         const fU = await User.findById(user._id);
         res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: fU.balance });
@@ -472,6 +494,10 @@ app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (
         if (payout > 0) { await processTransaction(user._id, payout, 'WIN', 'BLACKJACK'); if (result === 'WIN') await User.updateOne({ _id: user._id }, { $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } }); }
         else { await User.updateOne({ _id: user._id }, { $inc: { consecutiveLosses: 1 }, $set: { consecutiveWins: 0 } }); logGameResult('BLACKJACK', user.username, -g.bet, user.sessionProfit, user.sessionTotalBets); }
         await User.updateOne({ _id: user._id }, { $set: { activeGame: { type: 'NONE' } } });
+        
+        // SAVE LOG
+        await saveGameLog(user._id, 'BLACKJACK', g.bet, payout, { result, pScore, dScore }, g.riskLevel);
+
         const fU = await User.findById(user._id);
         res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: fU.balance });
     } catch(e) { res.status(500).json({message:e.message}); }
@@ -501,6 +527,10 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
         if (cM.includes(tileId)) {
             await User.updateOne({ _id: user._id }, { $set: { 'activeGame.type': 'NONE', consecutiveLosses: user.consecutiveLosses + 1, consecutiveWins: 0 } });
             logGameResult('MINES', user.username, -g.bet, user.sessionProfit, user.sessionTotalBets);
+            
+            // SAVE LOG (BOMB)
+            await saveGameLog(user._id, 'MINES', g.bet, 0, { outcome: 'BOMB', minesCount: g.minesCount, revealedCount: g.minesRevealed.length }, g.riskLevel);
+            
             return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: user.balance });
         }
         g.minesRevealed.push(tileId); const mult = 1.0 + (g.minesRevealed.length * 0.1 * g.minesCount); 
@@ -516,6 +546,10 @@ app.post('/api/mines/cashout', authenticateToken, checkActionCooldown, async (re
         const g = user.activeGame; const profit = parseFloat((g.bet * g.minesMultiplier).toFixed(2));
         await processTransaction(user._id, profit, 'WIN', 'MINES');
         await User.updateOne({ _id: user._id }, { $set: { 'activeGame.type': 'NONE', consecutiveWins: user.consecutiveWins + 1, consecutiveLosses: 0 } });
+        
+        // SAVE LOG (CASHOUT)
+        await saveGameLog(user._id, 'MINES', g.bet, profit, { outcome: 'CASHOUT', multiplier: g.minesMultiplier, revealedCount: g.minesRevealed.length }, g.riskLevel);
+
         const fU = await User.findById(user._id);
         res.json({ success: true, profit, newBalance: fU.balance, mines: g.minesList });
     } catch(e) { res.status(500).json({message:e.message}); }
@@ -534,8 +568,13 @@ app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequ
         if (outcome === 'BIG_WIN') { const m = secureRandomFloat() < 0.1 ? 10 : 2; win = amount * m; lines = [1]; grid = ['orange', 'bag', 'statue', 'orange', 'wild', 'orange', 'jewel', 'firecracker', 'envelope']; if (m === 10) { grid = Array(9).fill('wild'); lines = [0,1,2,3,4]; fs = true; } }
         else if (outcome === 'SMALL_WIN') { const m = (secureRandomInt(2, 8) / 10); win = amount * m; lines = [1]; grid = ['bag', 'firecracker', 'jewel', 'orange', 'orange', 'orange', 'envelope', 'statue', 'bag']; const top = ['bag', 'firecracker', 'jewel', 'statue', 'envelope']; secureShuffle(top); grid[0]=top[0]; grid[1]=top[1]; grid[2]=top[2]; grid[6]=top[3]; grid[7]=top[4]; grid[8]=top[0]; }
         else { win = 0; lines = []; const s = ['orange', 'bag', 'firecracker', 'envelope', 'statue', 'jewel']; grid = []; for(let i=0; i<9; i++) grid.push(s[secureRandomInt(0, s.length)]); }
+        
         if (win > 0) { await processTransaction(user._id, win, 'WIN', 'TIGER'); if (outcome === 'BIG_WIN') await User.updateOne({ _id: user._id }, { $inc: { consecutiveWins: 1 }, previousBet: amount }); else await User.updateOne({ _id: user._id }, { $set: { consecutiveWins: 0 }, previousBet: amount }); }
         else { await User.updateOne({ _id: user._id }, { $inc: { consecutiveLosses: 1 }, previousBet: amount }); logGameResult('TIGER', user.username, -amount, user.sessionProfit, user.sessionTotalBets); }
+        
+        // SAVE LOG
+        await saveGameLog(user._id, 'TIGER', amount, win, { grid, lines, isFullScreen: fs, outcome }, risk.level);
+
         const fU = await User.findById(user._id);
         res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: fU.balance });
     } catch(e) { res.status(400).json({message: e.message}); }
