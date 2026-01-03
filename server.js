@@ -13,7 +13,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.1.1-LOGFIX'; // Atualizado para correção de logs
+const VERSION = 'v2.1.2-LOGCLEAN'; // Atualizado para limpeza de logs
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -189,8 +189,12 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
         const integrityHash = generateHash({ ...txData, prevHash }); 
         await Transaction.create({ ...txData, integrityHash });
         
-        if (type === 'WIN') logGameResult(game, updatedUser.username, absAmount, updatedUser.sessionProfit, updatedUser.sessionTotalBets);
-        else logEvent('BANK', `${type}: User ${updatedUser.username} | ${balanceChange}`); // Habilitado para BET também
+        if (type === 'WIN') {
+            logGameResult(game, updatedUser.username, absAmount, updatedUser.sessionProfit, updatedUser.sessionTotalBets);
+        } else if (type !== 'BET') {
+            // Oculta logs de BET para não poluir, mostra apenas transações bancárias relevantes
+            logEvent('BANK', `${type}: User ${updatedUser.username} | ${balanceChange}`);
+        }
     } catch (e) { console.error("Tx Log Error", e); }
     return updatedUser;
 };
