@@ -1,27 +1,37 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Card, GameStatus, GameResult, User } from '../types';
+import { Card, GameStatus, GameResult, User, SideBets } from '../types';
 import { calculateScore } from '../services/gameLogic';
 import { CardComponent } from './CardComponent';
 import { GameControls } from './GameControls';
 import { AISuggestion } from './AISuggestion';
 import { DatabaseService } from '../services/database'; 
-import { Info, Lock, ShieldCheck } from 'lucide-react';
+import { Info, Lock, ShieldCheck, History as HistoryIcon, Maximize2, Calendar, X, ShieldAlert, Heart, Skull, TrendingUp, TrendingDown } from 'lucide-react';
 import { Notification } from './UI/Notification';
 import { ProvablyFairModal } from './UI/ProvablyFairModal';
+import { Button } from './UI/Button';
 
 interface BlackjackGameProps {
   user: User;
   updateUser: (data: Partial<User>) => void;
 }
 
+// --- HISTORY INTERFACE ---
+interface BjHistoryItem {
+    id: number;
+    bet: number;
+    payout: number;
+    result: GameResult;
+    timestamp: Date;
+}
+
 const MIN_BET = 1;
-const MAX_BET = 50;
+const MAX_BET = 100; // Increased Limit
 
 // --- AUDIO SYSTEM (Singleton Optimized) ---
 let audioCtx: AudioContext | null = null;
 
-const playSynthSound = (type: 'chip' | 'card' | 'win' | 'lose') => {
+const playSynthSound = (type: 'chip' | 'card' | 'win' | 'lose' | 'alert') => {
     try {
         if (!audioCtx) {
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -67,6 +77,14 @@ const playSynthSound = (type: 'chip' | 'card' | 'win' | 'lose') => {
                 osc.type = 'sawtooth';
                 osc.frequency.setValueAtTime(150, now);
                 osc.frequency.linearRampToValueAtTime(100, now + 0.3);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.linearRampToValueAtTime(0, now + 0.3);
+                osc.start(); osc.stop(now + 0.3);
+                break;
+            case 'alert':
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(600, now);
+                osc.frequency.setValueAtTime(800, now + 0.1);
                 gain.gain.setValueAtTime(0.1, now);
                 gain.gain.linearRampToValueAtTime(0, now + 0.3);
                 osc.start(); osc.stop(now + 0.3);
@@ -127,6 +145,109 @@ const CoinRain = React.memo(() => {
     );
 });
 
+// --- HISTORY COMPONENTS ---
+
+const MiniHistoryTicker = ({ history, onExpand }: { history: BjHistoryItem[], onExpand: () => void }) => {
+    // Show only top 3 items
+    const displayHistory = history.slice(0, 3);
+    
+    const getResultColor = (res: GameResult, profit: number) => {
+        if (res === GameResult.Blackjack) return 'text-yellow-400';
+        if (profit > 0) return 'text-green-400';
+        if (profit === 0) return 'text-slate-400';
+        return 'text-red-400';
+    };
+
+    const getResultBadge = (res: GameResult, profit: number) => {
+        if (res === GameResult.Blackjack) return <span className="bg-yellow-500/20 text-yellow-500 px-1.5 py-0.5 rounded text-[9px] font-bold border border-yellow-500/30">BJ</span>;
+        if (profit > 0) return <span className="bg-green-500/20 text-green-500 px-1.5 py-0.5 rounded text-[9px] font-bold border border-green-500/30">WIN</span>;
+        if (profit === 0) return <span className="bg-slate-500/20 text-slate-400 px-1.5 py-0.5 rounded text-[9px] font-bold border border-slate-500/30">PUSH</span>;
+        return <span className="bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-500/30">LOSE</span>;
+    };
+
+    return (
+        <div className="w-full bg-slate-900/80 backdrop-blur-md rounded-2xl border border-white/10 p-3 flex flex-col gap-2 shrink-0 relative group min-h-[160px]">
+            <div className="flex items-center justify-between pb-2 border-b border-white/5 mb-1 shrink-0">
+                <div className="flex items-center gap-2"><HistoryIcon size={14} className="text-casino-gold"/><span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Histórico</span></div>
+                <button onClick={onExpand} className="text-slate-500 hover:text-white transition-colors bg-white/5 p-1 rounded-md hover:bg-white/10" title="Ver Histórico Completo"><Maximize2 size={12} /></button>
+            </div>
+            <div className="flex flex-col gap-1.5 overflow-hidden">
+                {displayHistory.length === 0 && (<div className="flex flex-col items-center justify-center text-slate-600 opacity-50 py-4"><Calendar size={20} className="mb-1"/><span className="text-[9px] font-bold uppercase tracking-widest">Sem Registros</span></div>)}
+                {displayHistory.map((h) => {
+                    const profit = h.payout - h.bet;
+                    return (
+                        <div key={h.id} className={`flex items-center justify-between p-1.5 rounded-lg border text-xs animate-slide-up ${profit > 0 ? 'bg-green-900/10 border-green-500/10' : profit === 0 ? 'bg-slate-800/50 border-white/5' : 'bg-red-900/5 border-red-500/10'}`}>
+                             <div className="flex items-center gap-2">
+                                 {getResultBadge(h.result, profit)}
+                                 <span className="font-mono text-slate-400 text-[9px]">{h.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                             </div>
+                             <div className={`font-bold font-mono text-[10px] flex flex-col items-end leading-none ${getResultColor(h.result, profit)}`}>
+                                 <span>{h.payout > 0 ? `+${h.payout.toFixed(2)}` : `-${h.bet.toFixed(2)}`}</span>
+                                 {h.payout > 0 && <span className="text-[8px] opacity-70 font-medium text-slate-500">{profit > 0 ? 'Lucro' : 'Retorno'}</span>}
+                             </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {history.length > 3 && (<button onClick={onExpand} className="w-full text-[9px] text-slate-500 uppercase font-bold tracking-widest text-center hover:text-yellow-500 transition-colors mt-auto pt-1">Ver Todos ({history.length})</button>)}
+        </div>
+    );
+};
+
+const FullHistoryModal: React.FC<{ isOpen: boolean; onClose: () => void; history: BjHistoryItem[] }> = ({ isOpen, onClose, history }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-fade-in">
+            <div className="bg-slate-900 border border-white/10 w-full max-w-md rounded-2xl relative shadow-2xl flex flex-col max-h-[80vh]">
+                <div className="flex items-center justify-between p-4 border-b border-white/5 bg-slate-950/50 rounded-t-2xl">
+                    <div className="flex items-center gap-2">
+                        <HistoryIcon size={20} className="text-yellow-500" />
+                        <h3 className="text-white font-bold text-lg">Histórico Detalhado</h3>
+                    </div>
+                    <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button>
+                </div>
+                
+                {/* Header Row */}
+                <div className="grid grid-cols-4 gap-2 px-4 py-2 bg-slate-900 text-[10px] text-slate-500 font-bold uppercase tracking-wider border-b border-white/5">
+                    <div className="col-span-2">Resultado</div>
+                    <div className="text-right">Aposta</div>
+                    <div className="text-right">Retorno</div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2 space-y-1 no-scrollbar">
+                    {history.length === 0 && <div className="text-center text-slate-500 py-10">Nenhum registro encontrado.</div>}
+                    {history.map((h) => {
+                         const profit = h.payout - h.bet;
+                         const isWin = profit > 0;
+                         const isPush = profit === 0 && h.payout > 0;
+                         return (
+                            <div key={h.id} className={`grid grid-cols-4 gap-2 items-center p-3 rounded-lg border text-sm transition-colors ${isWin ? 'bg-green-950/20 border-green-500/20 hover:bg-green-950/30' : isPush ? 'bg-slate-800 border-slate-700' : 'bg-slate-950 border-white/5'}`}>
+                                <div className="col-span-2 flex items-center gap-3">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] border shrink-0 ${h.result === GameResult.Blackjack ? 'bg-yellow-500/20 text-yellow-500 border-yellow-500/30' : isWin ? 'bg-green-500/20 text-green-400 border-green-500/30' : isPush ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-red-900/20 text-red-500 border-red-500/20'}`}>
+                                        {h.result === GameResult.Blackjack ? 'BJ' : isWin ? 'WIN' : isPush ? 'PUSH' : 'LOSE'}
+                                    </div>
+                                    <div className="flex flex-col min-w-0">
+                                        <span className="font-mono text-slate-300 text-xs">{h.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                        <span className={`text-[9px] font-bold uppercase ${isWin ? 'text-green-500' : 'text-slate-600'}`}>
+                                            {isWin ? 'LUCRO: ' + profit.toFixed(2) : isPush ? 'Empate' : 'Perda'}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="text-right font-mono text-slate-400 text-xs">
+                                    {h.bet.toFixed(2)}
+                                </div>
+                                <div className={`text-right font-mono font-bold text-xs ${isWin ? 'text-green-400' : isPush ? 'text-white' : 'text-slate-600'}`}>
+                                    {h.payout > 0 ? `+${h.payout.toFixed(2)}` : '-'}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- MAIN COMPONENT ---
 
 export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }) => {
@@ -137,16 +258,30 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   const [lastBet, setLastBet] = useState<number>(0); 
   const [result, setResult] = useState<GameResult>(GameResult.None);
   
+  // Side Bets State
+  const [sideBets, setSideBets] = useState<SideBets>({ perfectPairs: 0, dealerBust: 0 });
+  const [insuranceBet, setInsuranceBet] = useState<number>(0); // Track if insurance bought
+  const [accumulatedWin, setAccumulatedWin] = useState<number>(0); // Track side bet winnings locally
+  
   const [isProcessing, setIsProcessing] = useState(false);
   const [decisionTimer, setDecisionTimer] = useState<number>(10);
   
   const [showProvablyFair, setShowProvablyFair] = useState(false);
   const [serverSeedHash, setServerSeedHash] = useState('');
 
+  // History State
+  const [history, setHistory] = useState<BjHistoryItem[]>([]);
+  const [showFullHistory, setShowFullHistory] = useState(false);
+
   const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
   
   const isMounted = useRef(true);
   const hasRestored = useRef(false);
+
+  // Computed Total Bet for Display (Sidebar) - ALWAYS visible and accurate
+  const totalBetInGame = useMemo(() => {
+      return bet + sideBets.perfectPairs + sideBets.dealerBust + insuranceBet;
+  }, [bet, sideBets, insuranceBet]);
 
   useEffect(() => {
       isMounted.current = true;
@@ -161,15 +296,23 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       if (user.activeGame && user.activeGame.type === 'BLACKJACK') {
           const game = user.activeGame;
           setBet(game.bet);
+          if (game.sideBets) setSideBets(game.sideBets);
+          if (game.insuranceBet) setInsuranceBet(game.insuranceBet);
+          
           if (game.bjPlayerHand) setPlayerHand(game.bjPlayerHand);
           if (game.bjDealerHand) {
-              const visibleDealer = (game.bjStatus === 'PLAYING')
+              const visibleDealer = (game.bjStatus === 'PLAYING' || game.bjStatus === 'INSURANCE')
                  ? [game.bjDealerHand[0], { ...game.bjDealerHand[1], isHidden: true }]
                  : game.bjDealerHand;
               setDealerHand(visibleDealer);
           }
           if (game.publicSeed) setServerSeedHash(game.publicSeed);
-          setStatus(GameStatus.Playing);
+          
+          if (game.bjStatus === 'INSURANCE') {
+              setStatus(GameStatus.Insurance);
+          } else {
+              setStatus(GameStatus.Playing);
+          }
       }
   }, []); // Run once
 
@@ -186,7 +329,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     return () => clearTimeout(timer);
   }, [decisionTimer, status]);
 
-  const playSound = useCallback((type: 'chip' | 'card' | 'win' | 'lose') => {
+  const playSound = useCallback((type: 'chip' | 'card' | 'win' | 'lose' | 'alert') => {
       if (isMounted.current) playSynthSound(type);
   }, []);
 
@@ -196,19 +339,23 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     setStatus(GameStatus.Idle);
     setResult(GameResult.None);
     setBet(0);
+    setSideBets({ perfectPairs: 0, dealerBust: 0 });
+    setInsuranceBet(0); // Reset Insurance
+    setAccumulatedWin(0); // Reset Win Accumulator
     setIsProcessing(false);
   }, []);
 
   const handleBet = useCallback((amount: number) => {
     if (isProcessing) return;
-    if (amount === 0) { setBet(0); return; }
+    if (amount === 0) { setBet(0); setSideBets({ perfectPairs: 0, dealerBust: 0 }); return; }
     const potentialBet = bet + amount;
     
+    // Check main bet against MAX_BET, but allow flexibility
     if (potentialBet > MAX_BET) {
         if (bet < MAX_BET && user.balance >= (MAX_BET - bet)) {
              setBet(MAX_BET); playSound('chip');
         } else {
-             setNotifyMsg(`Limite máximo da mesa é R$ ${MAX_BET}`);
+             setNotifyMsg(`Limite máximo da aposta principal é R$ ${MAX_BET}`);
         }
         return;
     }
@@ -219,26 +366,56 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     }
   }, [bet, isProcessing, user.balance, playSound]);
 
+  const handleSideBetAction = useCallback((type: 'perfectPairs' | 'dealerBust', action: 'toggle' | 'double' | 'clear') => {
+      if (bet === 0) { setNotifyMsg("Faça uma aposta principal primeiro."); return; }
+      
+      setSideBets(prev => {
+          let next = prev[type];
+          
+          if (action === 'clear') {
+              next = 0;
+          } else if (action === 'double') {
+              next = prev[type] * 2;
+              if (next === 0) next = 5; // Start if zero
+          } else { // Toggle
+              next = prev[type] === 0 ? 5 : prev[type] === 5 ? 10 : 0;
+          }
+          
+          // Limit individual side bet
+          if (next > 50) next = 50; 
+
+          if (user.balance < (bet + next - prev[type])) {
+              setNotifyMsg("Saldo insuficiente para aposta lateral.");
+              return prev;
+          }
+          
+          playSound('chip');
+          return { ...prev, [type]: next };
+      });
+  }, [bet, user.balance, playSound]);
+
   const dealCards = async () => {
+    const totalBet = bet + sideBets.perfectPairs + sideBets.dealerBust;
     if (bet === 0 || isProcessing) return;
     if (bet < MIN_BET) return;
-    if (bet > user.balance) return setNotifyMsg("Saldo insuficiente.");
+    if (totalBet > user.balance) return setNotifyMsg("Saldo insuficiente.");
 
     setIsProcessing(true); 
-    // Feedback imediato sonoro
     playSound('chip');
     
     // Optimistic Update
     const currentBalance = user.balance;
-    updateUser({ balance: currentBalance - bet });
+    updateUser({ balance: currentBalance - totalBet });
 
     try {
-        const data = await DatabaseService.blackjackDeal(user.id, bet);
+        const data: any = await DatabaseService.blackjackDeal(user.id, bet, sideBets);
         if (!isMounted.current) return;
 
         setStatus(GameStatus.Dealing);
         setLastBet(bet);
         setResult(GameResult.None);
+        setInsuranceBet(0); // Reset for new game
+        setAccumulatedWin(data.sideBetWin || 0); // Capture Perfect Pairs Win from Backend
         setIsProcessing(false); 
         
         // Update Seed
@@ -252,10 +429,10 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         setPlayerHand([]);
         setDealerHand([]);
 
-        // Sequential Deal Animation - ACELERADO (300ms em vez de 550ms)
+        // Sequential Deal Animation
         const dealSequence = async () => {
              if (!isMounted.current) return;
-             playSound('card'); // Som imediato
+             playSound('card'); 
              setPlayerHand([pHand[0]]); 
              await new Promise(r => setTimeout(r, 300));
              
@@ -268,6 +445,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
              await new Promise(r => setTimeout(r, 300));
              
              if (!isMounted.current) return;
+             // Only deal the visible part of dealer's second card (which is usually hidden back)
+             // But we set the object with isHidden: true from the response
              setDealerHand([dHand[0], dHand[1]]); playSound('card');
 
              if (data.status === 'GAME_OVER') {
@@ -278,7 +457,15 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
                      setDealerHand(data.dealerHand);
                  }
                  endGame(data.result);
+             } else if (data.status === 'INSURANCE') {
+                 // INSURANCE PATH: Force status update and halt
+                 await new Promise(r => setTimeout(r, 400));
+                 if (!isMounted.current) return;
+                 setStatus(GameStatus.Insurance);
+                 playSound('alert');
+                 // DO NOT proceed to Playing state here
              } else {
+                 // REGULAR PLAY PATH
                  setDecisionTimer(10);
                  setStatus(GameStatus.Playing);
              }
@@ -292,6 +479,49 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         setStatus(GameStatus.Idle);
         setBet(0);
     }
+  };
+
+  const handleInsurance = async (buy: boolean) => {
+      setIsProcessing(true);
+      const currentBalance = user.balance; // Snapshot for rollback
+      const cost = bet * 0.5;
+
+      try {
+          if (buy) {
+              setInsuranceBet(cost); // Visually update total immediately
+              // OPTIMISTIC UPDATE FOR INSURANCE
+              updateUser({ balance: currentBalance - cost }); 
+          }
+
+          const data: any = await DatabaseService.blackjackInsurance(user.id, buy);
+          if (!isMounted.current) return;
+          setIsProcessing(false);
+          
+          if (data.newBalance !== undefined) updateUser({ balance: data.newBalance });
+          
+          // Accumulate Insurance Win if any
+          if (data.insuranceWin) {
+              setAccumulatedWin(prev => prev + data.insuranceWin);
+          }
+          
+          if (data.status === 'GAME_OVER') {
+              // Dealer had blackjack
+              setDealerHand(data.dealerHand);
+              endGame(data.result);
+          } else {
+              // Continued playing
+              setStatus(GameStatus.Playing);
+              setDecisionTimer(10);
+          }
+      } catch (e: any) {
+          // CRITICAL UX FIX: ROLLBACK BALANCE
+          if (buy) {
+              setInsuranceBet(0);
+              updateUser({ balance: currentBalance }); 
+          }
+          setNotifyMsg(e.message || "Erro no seguro.");
+          setIsProcessing(false);
+      }
   };
 
   const handleHit = async () => {
@@ -320,11 +550,16 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     if (isProcessing) return;
     setIsProcessing(true);
     try {
-        const data = await DatabaseService.blackjackStand(user.id);
+        const data: any = await DatabaseService.blackjackStand(user.id);
         if (!isMounted.current) return;
 
         setIsProcessing(false);
         setStatus(GameStatus.DealerTurn);
+        
+        // Capture Dealer Bust Win
+        if (data.sideBetWin) {
+            setAccumulatedWin(prev => prev + data.sideBetWin);
+        }
 
         const animateDealerTurn = async () => {
              const finalDealerHand = data.dealerHand;
@@ -360,6 +595,28 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     if (res === GameResult.PlayerWin || res === GameResult.Blackjack) playSound('win');
     else if (res === GameResult.DealerWin || res === GameResult.Bust) playSound('lose');
 
+    // --- LOGIC FIX: TOTAL PAYOUT CALCULATION ---
+    // Calculate Main Hand Payout
+    let mainPayout = 0;
+    if (res === GameResult.Blackjack) mainPayout = bet * 2.5;
+    else if (res === GameResult.PlayerWin) mainPayout = bet * 2;
+    else if (res === GameResult.Push) mainPayout = bet;
+    
+    // Total Payout = Main + Side Wins (Accumulated from Deal/Stand responses)
+    const totalPayout = mainPayout + accumulatedWin;
+    
+    // Total Cost = Bet + Sides + Insurance
+    const totalCost = bet + sideBets.perfectPairs + sideBets.dealerBust + insuranceBet;
+
+    const historyItem: BjHistoryItem = {
+        id: Date.now(),
+        bet: totalCost, // Show total invested
+        payout: totalPayout, // Show total returned
+        result: res,
+        timestamp: new Date()
+    };
+    setHistory(prev => [historyItem, ...prev].slice(0, 50));
+
     setStatus(GameStatus.GameOver);
     setIsProcessing(false);
 
@@ -378,14 +635,27 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       setPlayerHand([]);
       setDealerHand([]);
       setBet(0);
+      setSideBets({ perfectPairs: 0, dealerBust: 0 });
+      setInsuranceBet(0);
+      setAccumulatedWin(0);
       setStatus(GameStatus.Idle);
-    }, 2500); 
+    }, 3500); // Extended delay to read results
   };
 
   const playerScore = useMemo(() => calculateScore(playerHand), [playerHand]);
   const dealerScore = useMemo(() => calculateScore(dealerHand), [dealerHand]);
   const isDealerHidden = dealerHand.some(c => c.isHidden);
   
+  // Calculate Payout for display only
+  const displayPayout = useMemo(() => {
+      if (status !== GameStatus.GameOver) return 0;
+      let p = 0;
+      if (result === GameResult.Blackjack) p = bet * 2.5;
+      else if (result === GameResult.PlayerWin) p = bet * 2;
+      else if (result === GameResult.Push) p = bet;
+      return p + accumulatedWin;
+  }, [status, result, bet, accumulatedWin]);
+
   const showWinAnimation = status === GameStatus.GameOver && (
       result === GameResult.Blackjack || 
       (result === GameResult.PlayerWin && playerScore === 21)
@@ -403,6 +673,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
           clientSeed={user.id}
           nonce={playerHand.length + dealerHand.length}
       />
+      <FullHistoryModal isOpen={showFullHistory} onClose={() => setShowFullHistory(false)} history={history} />
 
       <div className="absolute top-5 md:top-8 left-0 right-0 text-center z-20 pointer-events-none">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]">
@@ -410,93 +681,158 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
           </h1>
       </div>
 
-      <div className="flex-1 w-full max-w-[1600px] flex items-center justify-center gap-2 xl:gap-8 relative p-2 md:p-4 min-h-0 pt-16 md:pt-20">
-        <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0">
-             <div className="bg-slate-900/80 border border-white/10 rounded-2xl p-6 backdrop-blur-md">
-                <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
-                    <h3 className="text-casino-gold font-bold flex items-center gap-2 uppercase tracking-widest text-sm"><Info size={16} /> Regras</h3>
-                    <button onClick={() => setShowProvablyFair(true)} className="text-green-500 hover:text-green-400 transition-colors" title="Provably Fair"><ShieldCheck size={16} /></button>
-                </div>
-                <ul className="space-y-3 text-sm text-slate-300">
-                    <li className="flex justify-between border-b border-white/5 pb-2"><span>Apostas</span><span className="font-bold text-white">R$ {MIN_BET} - R$ {MAX_BET}</span></li>
-                    <li className="flex justify-between border-b border-white/5 pb-2"><span>Blackjack</span><span className="font-bold text-white">Paga 3:2</span></li>
-                    <li className="flex justify-between border-b border-white/5 pb-2"><span>Dealer</span><span className="font-bold text-white">Para no 17</span></li>
-                </ul>
-            </div>
-            <div className={`transition-all duration-300 transform ${bet > 0 ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-                <div className={`rounded-2xl p-1 shadow-lg ${status !== GameStatus.Idle ? 'bg-gradient-to-br from-casino-gold to-yellow-600 animate-pulse-gold' : 'bg-slate-700'}`}>
-                    <div className="bg-slate-900 rounded-xl p-4 text-center relative overflow-hidden">
-                        {status !== GameStatus.Idle && (<div className="absolute top-2 right-2 text-casino-gold"><Lock size={12} /></div>)}
-                        <div className="text-xs text-slate-400 uppercase tracking-widest mb-1">{status === GameStatus.Idle ? 'Sua Aposta' : 'Aposta em Jogo'}</div>
-                        <div className="text-2xl font-bold text-white">R$ {bet.toFixed(2)}</div>
+      <div className="flex-1 w-full flex items-center justify-center min-h-0 pt-20 pb-8 px-4 overflow-y-auto no-scrollbar">
+        
+        {/* INNER GRID: Align Top items inside a Centered Page Container */}
+        <div className="w-full max-w-[1600px] flex items-start justify-center gap-4 xl:gap-8">
+            
+            {/* --- LEFT SIDEBAR (Added self-center and justify-center) --- */}
+            <div className="hidden xl:flex w-[280px] flex-col gap-3 justify-center shrink-0 self-center">
+                {/* 1. Rules Panel */}
+                <div className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 backdrop-blur-md shrink-0">
+                    <div className="flex justify-between items-center mb-2 border-b border-white/5 pb-2">
+                        <h3 className="text-casino-gold font-bold flex items-center gap-2 uppercase tracking-widest text-xs"><Info size={14} /> Regras</h3>
+                        <button onClick={() => setShowProvablyFair(true)} className="text-green-500 hover:text-green-400 transition-colors bg-white/5 p-1 rounded-md" title="Provably Fair"><ShieldCheck size={14} /></button>
                     </div>
+                    <ul className="space-y-1 text-[10px] text-slate-300">
+                        <li className="flex justify-between border-b border-white/5 pb-0.5"><span>Apostas</span><span className="font-bold text-white">R$ {MIN_BET} - {MAX_BET}</span></li>
+                        <li className="flex justify-between border-b border-white/5 pb-0.5"><span>Blackjack</span><span className="font-bold text-white">3:2</span></li>
+                        <li className="flex justify-between border-b border-white/5 pb-0.5"><span>Dealer</span><span className="font-bold text-white">Para no 17</span></li>
+                        <li className="flex justify-between border-b border-white/5 pb-0.5"><span>Seguro</span><span className="font-bold text-white">2:1</span></li>
+                        <li className="flex justify-between border-b border-white/5 pb-0.5"><span>Par Perfeito</span><span className="font-bold text-yellow-400">Até 30:1</span></li>
+                        <li className="flex justify-between border-b border-white/5 pb-0.5"><span>Banca Estoura</span><span className="font-bold text-yellow-400">2:1</span></li>
+                    </ul>
                 </div>
-            </div>
-        </div>
 
-        <div className="relative w-full flex-1 max-w-[800px] aspect-[3/4] sm:aspect-[4/3] max-h-full bg-casino-felt rounded-[2rem] md:rounded-[3rem] border-[8px] md:border-[12px] border-slate-800 shadow-[inset_0_0_80px_rgba(0,0,0,0.7),0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col justify-between z-10 transition-all duration-300">
-            {showWinAnimation && <CoinRain />}
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 opacity-10 pointer-events-none text-center z-0">
-                <div className="text-3xl md:text-5xl font-black text-black tracking-widest border-4 border-black px-4 py-2 md:px-8 md:py-4 rounded-xl transform -rotate-12 whitespace-nowrap flex gap-3">BJ <span className="text-casino-gold">IA</span></div>
-            </div>
-
-            {status === GameStatus.GameOver && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none animate-fade-in">
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
-                    {(result === GameResult.PlayerWin || result === GameResult.Blackjack) ? (
-                        <div className="relative flex items-center justify-center scale-75 md:scale-100 z-10">
-                            <div className="absolute w-[300px] h-[300px] bg-gradient-to-r from-yellow-500/0 via-yellow-500/10 to-yellow-500/0 animate-[spin_4s_linear_infinite] rounded-full blur-xl"></div>
-                            <div className="relative">
-                                <div className="bg-black/90 border-2 border-yellow-500 px-8 py-3 rounded-full shadow-[0_0_30px_rgba(234,179,8,0.5)] animate-pulse relative z-20 min-w-[160px] text-center">
-                                    <p className="text-xl md:text-2xl font-bold text-yellow-400 tracking-wider">+ R$ {(result === GameResult.Blackjack ? bet * 2.5 : bet * 2).toFixed(2)}</p>
+                {/* 2. Status Panel (Fixed Height Wrapper Reduced to 64px) */}
+                <div className="h-[64px] w-full flex-none relative">
+                    <div className={`absolute inset-0 rounded-2xl p-1 shadow-lg transition-all duration-300 ${status !== GameStatus.Idle && status !== GameStatus.GameOver ? 'bg-gradient-to-br from-casino-gold to-yellow-600 animate-pulse-gold' : 'bg-slate-800 border border-white/5'}`}>
+                        <div className="bg-slate-900 rounded-xl p-2 text-center relative overflow-hidden h-full flex flex-col justify-center">
+                            {(status !== GameStatus.Idle && status !== GameStatus.GameOver) && (<div className="absolute top-1.5 right-2 text-casino-gold"><Lock size={10} /></div>)}
+                            <div className="flex flex-col items-center">
+                                <div className="text-[9px] text-slate-400 uppercase tracking-widest mb-0.5">{status === GameStatus.Idle || status === GameStatus.GameOver ? 'Sua Aposta' : 'Aposta em Jogo'}</div>
+                                <div className={`text-xl font-bold font-mono leading-tight ${status !== GameStatus.Idle && status !== GameStatus.GameOver ? 'text-yellow-400' : 'text-white'}`}>
+                                    {/* FIXED: ALWAYS show Total Bet (Main + Side + Insurance) */}
+                                    R$ {totalBetInGame.toFixed(2)}
                                 </div>
                             </div>
                         </div>
-                    ) : result === GameResult.Push ? (
-                        <div className="bg-slate-800/90 border-4 border-slate-500 px-6 py-4 rounded-2xl shadow-2xl relative z-10 scale-90 md:scale-95"><h2 className="text-3xl md:text-4xl font-black text-slate-300">EMPATE</h2></div>
-                    ) : (
-                        <div className="bg-red-900/80 border-4 border-red-600 px-6 py-4 rounded-2xl shadow-2xl relative z-10 scale-90 md:scale-95 grayscale-[0.2]"><h2 className="text-3xl md:text-4xl font-black text-white drop-shadow-lg">A BANCA VENCEU</h2></div>
+                    </div>
+                </div>
+
+                {/* 3. History Ticker (3 Rows) */}
+                <MiniHistoryTicker history={history} onExpand={() => setShowFullHistory(true)} />
+            </div>
+
+            {/* --- MAIN TABLE AREA (Reduced Dimensions) --- */}
+            <div className="relative w-full flex-1 max-w-[780px] aspect-[3/4] sm:aspect-[4/3] max-h-[65vh] bg-casino-felt rounded-[2rem] md:rounded-[3rem] border-[8px] md:border-[12px] border-slate-800 shadow-[inset_0_0_80px_rgba(0,0,0,0.7),0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col justify-between z-10 transition-all duration-300">
+                {showWinAnimation && <CoinRain />}
+                {/* BACKGROUND TEXT REMOVED */}
+
+                {/* Side Bets Visual Chips - Repositioned to Right Side Vertical */}
+                {/* AJUSTE: Removido GameOver para ocultar durante o resultado */}
+                {(status === GameStatus.Playing || status === GameStatus.Dealing || status === GameStatus.Insurance) && (sideBets.perfectPairs > 0 || sideBets.dealerBust > 0) && (
+                    <div className="absolute bottom-[20%] right-4 flex flex-col gap-4 items-end pointer-events-none z-0">
+                        {sideBets.perfectPairs > 0 && (
+                            <div className="flex items-center gap-2 animate-fade-in">
+                                <span className="text-[8px] text-purple-300 font-bold uppercase tracking-widest bg-black/40 px-2 py-1 rounded backdrop-blur-md">Par Perfeito</span>
+                                <div className="flex flex-col items-center">
+                                    <div className="w-10 h-10 rounded-full border-2 border-purple-500 bg-purple-900/60 flex items-center justify-center text-white shadow-[0_4px_15px_rgba(168,85,247,0.4)] animate-pulse">
+                                        <Heart size={14} fill="currentColor" />
+                                    </div>
+                                    <span className="text-[9px] font-black text-white drop-shadow-md -mt-2 bg-slate-900 px-1.5 rounded-full border border-purple-500/50 z-10">R${sideBets.perfectPairs}</span>
+                                </div>
+                            </div>
+                        )}
+                        {sideBets.dealerBust > 0 && (
+                            <div className="flex items-center gap-2 animate-fade-in" style={{ animationDelay: '100ms' }}>
+                                <span className="text-[8px] text-red-300 font-bold uppercase tracking-widest bg-black/40 px-2 py-1 rounded backdrop-blur-md">Banca Estoura</span>
+                                <div className="flex flex-col items-center">
+                                    <div className="w-10 h-10 rounded-full border-2 border-red-500 bg-red-900/60 flex items-center justify-center text-white shadow-[0_4px_15px_rgba(239,68,68,0.4)] animate-pulse">
+                                        <Skull size={16} />
+                                    </div>
+                                    <span className="text-[9px] font-black text-white drop-shadow-md -mt-2 bg-slate-900 px-1.5 rounded-full border border-red-500/50 z-10">R${sideBets.dealerBust}</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {status === GameStatus.GameOver && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none animate-fade-in">
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        {(result === GameResult.PlayerWin || result === GameResult.Blackjack) ? (
+                            <div className="relative flex items-center justify-center scale-75 md:scale-100 z-10">
+                                <div className="absolute w-[300px] h-[300px] bg-gradient-to-r from-yellow-500/0 via-yellow-500/10 to-yellow-500/0 animate-[spin_4s_linear_infinite] rounded-full blur-xl"></div>
+                                <div className="relative">
+                                    <div className="bg-black/90 border-2 border-yellow-500 px-8 py-4 rounded-3xl shadow-[0_0_50px_rgba(234,179,8,0.6)] animate-pulse relative z-20 min-w-[200px] text-center flex flex-col items-center">
+                                        <span className="text-yellow-500 text-[10px] font-black uppercase tracking-[0.3em] mb-1 drop-shadow-md">{result === GameResult.Blackjack ? 'BLACKJACK PAYOUT' : 'VOCÊ VENCEU'}</span>
+                                        <p className="text-3xl md:text-4xl font-black text-white tracking-tighter drop-shadow-xl">+ R$ {displayPayout.toFixed(2)}</p>
+                                        <div className="w-full h-1 bg-gradient-to-r from-transparent via-yellow-500 to-transparent mt-2"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : result === GameResult.Push ? (
+                            <div className="bg-slate-800/90 border-4 border-slate-500 px-6 py-4 rounded-2xl shadow-2xl relative z-10 scale-90 md:scale-95 text-center">
+                                <h2 className="text-3xl md:text-4xl font-black text-slate-300">EMPATE</h2>
+                                {displayPayout > 0 && <p className="text-sm text-slate-400 mt-1 font-mono">Retorno: R$ {displayPayout.toFixed(2)}</p>}
+                            </div>
+                        ) : (
+                            <div className="bg-red-900/80 border-4 border-red-600 px-6 py-4 rounded-2xl shadow-2xl relative z-10 scale-90 md:scale-95 grayscale-[0.2]"><h2 className="text-3xl md:text-4xl font-black text-white drop-shadow-lg">A BANCA VENCEU</h2></div>
+                        )}
+                    </div>
+                )}
+
+                <div className="flex-1 flex flex-col items-center justify-start pt-6 md:pt-10 relative z-10 min-h-0">
+                    <div className="relative mb-2">
+                        <div className="absolute inset-0 flex justify-center opacity-30 pointer-events-none scale-75 md:scale-100 origin-top"><GhostSlot /><GhostSlot /></div>
+                        <div className="flex justify-center gap-2 relative scale-90 md:scale-100 origin-top">
+                            {dealerHand.map((card, i) => (<CardComponent key={card.id} card={card} index={i} />))}
+                        </div>
+                    </div>
+                    {dealerHand.length > 0 && (<ScoreBadge score={dealerScore} label="Banca" hidden={isDealerHidden} />)}
+                </div>
+
+                <div className="flex-none flex justify-center items-center w-full px-4 py-6 z-40 min-h-[120px] relative">
+                    {isProcessing && (<div className="absolute inset-0 z-50 flex items-center justify-center rounded-3xl cursor-wait"><div className="w-8 h-8 border-4 border-casino-gold border-t-transparent rounded-full animate-spin drop-shadow-lg"></div></div>)}
+                    {/* AJUSTE: Adicionada verificação estrita do status para não renderizar nada no GameOver */}
+                    {status !== GameStatus.GameOver && (
+                        <div className={`animate-fade-in scale-90 md:scale-100 transition-opacity duration-300 ${status === GameStatus.Dealing ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                            <GameControls 
+                                status={status} 
+                                currentBet={bet} 
+                                lastBet={lastBet} 
+                                balance={user.balance} 
+                                onBet={handleBet} 
+                                onDeal={dealCards} 
+                                onHit={handleHit} 
+                                onStand={handleStand} 
+                                onReset={initializeGame} 
+                                decisionTime={decisionTimer}
+                                sideBets={sideBets}
+                                onSideBetAction={handleSideBetAction}
+                                onInsurance={handleInsurance}
+                                insuranceBet={insuranceBet}
+                            />
+                        </div>
                     )}
                 </div>
-            )}
 
-            <div className="flex-1 flex flex-col items-center justify-start pt-6 md:pt-10 relative z-10 min-h-0">
-                <div className="relative mb-2">
-                    <div className="absolute inset-0 flex justify-center opacity-30 pointer-events-none scale-75 md:scale-100 origin-top"><GhostSlot /><GhostSlot /></div>
-                    <div className="flex justify-center gap-2 relative scale-90 md:scale-100 origin-top">
-                        {dealerHand.map((card, i) => (<CardComponent key={card.id} card={card} index={i} />))}
+                <div className="flex-1 flex flex-col items-center justify-end pb-6 md:pb-10 relative z-10 min-h-0">
+                    <div className="relative mb-2">
+                        <div className="absolute inset-0 flex justify-center opacity-30 pointer-events-none scale-75 md:scale-100 origin-bottom"><GhostSlot /><GhostSlot /></div>
+                        <div className="flex justify-center gap-2 relative scale-90 md:scale-100 origin-bottom">
+                            {playerHand.map((card, i) => (<CardComponent key={card.id} card={card} index={i} />))}
+                        </div>
                     </div>
+                    {playerHand.length > 0 && (<ScoreBadge score={playerScore} label="Você" />)}
                 </div>
-                {dealerHand.length > 0 && (<ScoreBadge score={dealerScore} label="Banca" hidden={isDealerHidden} />)}
             </div>
 
-            <div className="flex-none flex justify-center items-center w-full px-4 py-6 z-40 min-h-[120px] relative">
-                {isProcessing && (<div className="absolute inset-0 z-50 flex items-center justify-center rounded-3xl cursor-wait"><div className="w-8 h-8 border-4 border-casino-gold border-t-transparent rounded-full animate-spin drop-shadow-lg"></div></div>)}
-                {(status === GameStatus.Idle || status === GameStatus.Betting || status === GameStatus.Dealing) && (
-                    <div className="animate-fade-in scale-90 md:scale-100 transition-opacity duration-300" style={{ opacity: status === GameStatus.Dealing ? 0 : 1, pointerEvents: status === GameStatus.Dealing ? 'none' : 'auto' }}>
-                        <GameControls status={status} currentBet={bet} lastBet={lastBet} balance={user.balance} onBet={handleBet} onDeal={dealCards} onHit={handleHit} onStand={handleStand} onReset={initializeGame} />
-                    </div>
-                )}
-                {status === GameStatus.Playing && (
-                    <div className="animate-fade-in scale-90 md:scale-100">
-                        <GameControls status={status} currentBet={bet} balance={user.balance} onBet={handleBet} onDeal={dealCards} onHit={handleHit} onStand={handleStand} onReset={initializeGame} decisionTime={decisionTimer} />
-                    </div>
-                )}
+            {/* --- RIGHT SIDEBAR (Centered Vertically) --- */}
+            <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0 self-center">
+                <AISuggestion playerHand={playerHand} dealerHand={dealerHand} status={status} />
             </div>
-
-            <div className="flex-1 flex flex-col items-center justify-end pb-6 md:pb-10 relative z-10 min-h-0">
-                <div className="relative mb-2">
-                    <div className="absolute inset-0 flex justify-center opacity-30 pointer-events-none scale-75 md:scale-100 origin-bottom"><GhostSlot /><GhostSlot /></div>
-                    <div className="flex justify-center gap-2 relative scale-90 md:scale-100 origin-bottom">
-                        {playerHand.map((card, i) => (<CardComponent key={card.id} card={card} index={i} />))}
-                    </div>
-                </div>
-                {playerHand.length > 0 && (<ScoreBadge score={playerScore} label="Você" />)}
-            </div>
-        </div>
-
-        <div className="hidden xl:flex w-[280px] flex-col gap-4 justify-center shrink-0">
-             <AISuggestion playerHand={playerHand} dealerHand={dealerHand} status={status} />
         </div>
       </div>
       

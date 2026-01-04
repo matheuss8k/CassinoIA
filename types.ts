@@ -48,6 +48,11 @@ export interface StoreItem {
   icon: string;
 }
 
+export interface SideBets {
+    perfectPairs: number;
+    dealerBust: number;
+}
+
 // Interface para restaurar estado do jogo
 export interface ActiveGame {
   type: 'BLACKJACK' | 'MINES' | 'NONE';
@@ -56,6 +61,8 @@ export interface ActiveGame {
   bjPlayerHand?: Card[];
   bjDealerHand?: Card[];
   bjStatus?: string;
+  sideBets?: SideBets;
+  insuranceBet?: number;
   // Mines Props
   minesCount?: number;
   minesRevealed?: number[]; // IDs dos tiles revelados
@@ -105,7 +112,8 @@ export enum GameStatus {
   Dealing = 'DEALING', 
   Playing = 'PLAYING', 
   DealerTurn = 'DEALER_TURN', 
-  GameOver = 'GAME_OVER' 
+  GameOver = 'GAME_OVER',
+  Insurance = 'INSURANCE' // New Status
 }
 
 export enum GameResult {

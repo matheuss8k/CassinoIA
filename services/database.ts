@@ -1,5 +1,5 @@
 
-import { User } from '../types';
+import { User, SideBets } from '../types';
 
 // --- CONFIGURAÇÃO ROBUSTA DE URL ---
 // Determina a URL base dinamicamente para evitar referências a localhost em produção.
@@ -178,8 +178,8 @@ export const DatabaseService = {
       return handleResponse(response);
   },
 
-  blackjackDeal: async (userId: string, amount: number) => {
-      const response = await fetchWithRetry(`${API_URL}/blackjack/deal`, { method: 'POST', body: JSON.stringify({ userId, amount }) });
+  blackjackDeal: async (userId: string, amount: number, sideBets?: SideBets) => {
+      const response = await fetchWithRetry(`${API_URL}/blackjack/deal`, { method: 'POST', body: JSON.stringify({ userId, amount, sideBets }) });
       return handleResponse(response);
   },
 
@@ -190,6 +190,11 @@ export const DatabaseService = {
 
   blackjackStand: async (userId: string) => {
       const response = await fetchWithRetry(`${API_URL}/blackjack/stand`, { method: 'POST', body: JSON.stringify({ userId }) });
+      return handleResponse(response);
+  },
+
+  blackjackInsurance: async (userId: string, buyInsurance: boolean) => {
+      const response = await fetchWithRetry(`${API_URL}/blackjack/insurance`, { method: 'POST', body: JSON.stringify({ userId, buyInsurance }) });
       return handleResponse(response);
   },
 

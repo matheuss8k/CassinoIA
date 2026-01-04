@@ -95,18 +95,18 @@ const BalanceDisplay = ({ balance, onClick }: { balance: number, onClick: () => 
     if (change > 0) setTrend('up');
     else if (change < 0) setTrend('down');
 
-    const duration = 1500;
+    const duration = 500; // Accelerated animation (was 1500ms)
     const startTime = performance.now();
     const animate = (currentTime: number) => {
       const elapsed = currentTime - startTime;
       const progress = Math.min(elapsed / duration, 1);
-      const ease = 1 - Math.pow(1 - progress, 5);
+      const ease = 1 - Math.pow(1 - progress, 3); // Slightly sharper ease
       const current = start + (change * ease);
       setDisplayValue(current);
       if (progress < 1) requestAnimationFrame(animate);
       else {
         setDisplayValue(end);
-        setTimeout(() => setTrend('neutral'), 500);
+        setTimeout(() => setTrend('neutral'), 300);
         previousBalanceRef.current = end;
       }
     };
