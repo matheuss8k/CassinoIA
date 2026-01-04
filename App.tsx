@@ -155,7 +155,7 @@ const BalanceDisplay = ({ balance, onClick }: { balance: number, onClick: () => 
 };
 
 // --- LAYOUT DA APLICAÇÃO (NAVBAR + CONTENT) ---
-const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, children: React.ReactNode, onLogout: () => void, onOpenWallet: () => void }) => {
+const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, children?: React.ReactNode, onLogout: () => void, onOpenWallet: () => void }) => {
     const location = useLocation();
     const isDashboard = location.pathname === '/';
     const avatarConfig = getNavbarAvatar(user.avatarId);
@@ -210,7 +210,7 @@ interface ProtectedRouteProps {
     user: User | null;
     onLogout: () => void;
     onOpenWallet: () => void;
-    children: React.ReactNode;
+    children?: React.ReactNode;
 }
 const ProtectedRoute = ({ user, onLogout, onOpenWallet, children }: ProtectedRouteProps) => {
     if (!user) return <Navigate to="/" replace />;

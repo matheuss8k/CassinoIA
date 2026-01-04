@@ -1,3 +1,4 @@
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -13,11 +14,30 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BET_LIMIT = 100; 
-const VERSION = 'v2.9.0-GOLD'; // Versão Final de Produção
+const VERSION = 'v3.0.0-RC1'; // Release Candidate 1
 
 // --- AMBIENTE ---
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ALLOWED_ORIGIN = process.env.FRONTEND_URL || true; 
+
+// --- USER LOCKS (MUTEX) ---
+// Previne Race Conditions de requisições paralelas do mesmo usuário
+const userLocks = new Map();
+const acquireLock = (userId) => {
+    if (userLocks.has(userId)) return false;
+    userLocks.set(userId, Date.now());
+    return true;
+};
+const releaseLock = (userId) => {
+    userLocks.delete(userId);
+};
+// Limpeza automática de locks travados (segurança contra deadlocks)
+setInterval(() => {
+    const now = Date.now();
+    for (const [userId, timestamp] of userLocks.entries()) {
+        if (now - timestamp > 5000) userLocks.delete(userId); // 5s timeout
+    }
+}, 1000);
 
 // --- CACHE DE ARQUIVOS ESTÁTICOS (PERFORMANCE CRÍTICA) ---
 let cachedIndexHtml = null;
@@ -238,8 +258,9 @@ const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel)
 
 // --- BANK GRADE TRANSACTION PROCESSOR (ACID + PRECISION FIX) ---
 const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null) => {
-    // FIX: Floating Point Precision (Arredondamento Bancário)
-    const safeAmount = Math.round(Math.abs(amount) * 100) / 100;
+    // FIX: Round to 2 decimals properly to avoid IEEE 754 float errors
+    // Converte para centavos (int), opera e volta para float
+    const safeAmount = Math.floor(Math.abs(amount) * 100) / 100;
     
     const balanceChange = (type === 'BET' || type === 'WITHDRAW') ? -safeAmount : safeAmount;
     const profitChange = (type === 'WIN') ? safeAmount : (type === 'BET') ? -safeAmount : 0;
@@ -286,7 +307,6 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             }
         } else {
             // Fallback para ambientes sem Replica Set (Dev Mode)
-            // Em PROD isso não deve acontecer se o MongoDB estiver configurado corretamente
             const query = { _id: userId };
             if (balanceChange < 0) query.balance = { $gte: Math.abs(balanceChange) };
             
@@ -342,6 +362,22 @@ const calculateRisk = (user, currentBet) => {
     return { isRigged, level, reason };
 };
 
+// --- MIDDLEWARE: LOCK USER ACTION ---
+const lockUserAction = (req, res, next) => {
+    if (req.user && req.user.id) {
+        if (!acquireLock(req.user.id)) {
+            return res.status(429).json({ message: 'Aguarde a ação anterior terminar.' });
+        }
+        // Hook into res.json/send/end to release lock
+        const originalSend = res.send;
+        res.send = function (...args) {
+            releaseLock(req.user.id);
+            originalSend.apply(res, args);
+        };
+    }
+    next();
+};
+
 const createRateLimiter = ({ windowMs, max }) => {
     const requests = new Map();
     setInterval(() => {
@@ -367,16 +403,6 @@ const createRateLimiter = ({ windowMs, max }) => {
         }
         next();
     };
-};
-
-const checkActionCooldown = (req, res, next) => {
-    const userId = req.user?.id;
-    if (!userId) return next();
-    const now = Date.now();
-    const lastAction = app.locals[`cooldown_${userId}`] || 0;
-    if (now - lastAction < 150) return res.status(429).json({ message: 'Rápido demais.' });
-    app.locals[`cooldown_${userId}`] = now;
-    next();
 };
 
 const validateRequest = (schema) => (req, res, next) => {
@@ -571,7 +597,7 @@ app.post('/api/register', validateRequest(RegisterSchema), async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Erro ao criar conta.' }); }
 });
 
-app.post('/api/balance', authenticateToken, async (req, res) => {
+app.post('/api/balance', authenticateToken, lockUserAction, async (req, res) => {
     const { newBalance } = req.body; 
     const user = await User.findById(req.user.id);
     if (!user) return res.sendStatus(404);
@@ -606,7 +632,7 @@ app.post('/api/user/verify', authenticateToken, async (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/store/purchase', authenticateToken, validateRequest(z.object({ itemId: z.string(), cost: z.number().int().positive() })), async (req, res) => {
+app.post('/api/store/purchase', authenticateToken, lockUserAction, validateRequest(z.object({ itemId: z.string(), cost: z.number().int().positive() })), async (req, res) => {
     try {
         const { itemId, cost } = req.body;
         const user = await User.findById(req.user.id);
@@ -620,7 +646,7 @@ app.post('/api/store/purchase', authenticateToken, validateRequest(z.object({ it
 });
 
 // --- BLACKJACK GAMES ROUTES ---
-app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validateRequest(BetSchema), async (req, res) => {
+app.post('/api/blackjack/deal', authenticateToken, lockUserAction, validateRequest(BetSchema), async (req, res) => {
     try {
         const { amount, sideBets } = req.body;
         const ppBet = sideBets?.perfectPairs || 0;
@@ -723,7 +749,7 @@ app.post('/api/blackjack/deal', authenticateToken, checkActionCooldown, validate
     } catch(e) { res.status(400).json({ message: e.message }); }
 });
 
-app.post('/api/blackjack/insurance', authenticateToken, async (req, res) => {
+app.post('/api/blackjack/insurance', authenticateToken, lockUserAction, async (req, res) => {
     try {
         const { buyInsurance } = req.body;
         const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' }).select('+activeGame.bjDeck');
@@ -802,7 +828,7 @@ app.post('/api/blackjack/insurance', authenticateToken, async (req, res) => {
     } catch(e) { res.status(500).json({ message: "Erro no seguro." }); }
 });
 
-app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (req, res) => {
+app.post('/api/blackjack/hit', authenticateToken, lockUserAction, async (req, res) => {
     try {
         const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' }).select('+activeGame.bjDeck');
         if(!user) return res.status(400).json({message:'Inválido'});
@@ -830,7 +856,7 @@ app.post('/api/blackjack/hit', authenticateToken, checkActionCooldown, async (re
     } catch(e) { res.status(500).json({message:e.message}); }
 });
 
-app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (req, res) => {
+app.post('/api/blackjack/stand', authenticateToken, lockUserAction, async (req, res) => {
     try {
         const user = await User.findOne({ _id: req.user.id, 'activeGame.type': 'BLACKJACK' }).select('+activeGame.bjDeck');
         if(!user) return res.status(400).json({message:'Inválido'});
@@ -875,7 +901,7 @@ app.post('/api/blackjack/stand', authenticateToken, checkActionCooldown, async (
     } catch(e) { res.status(500).json({message:e.message}); }
 });
 
-app.post('/api/mines/start', authenticateToken, checkActionCooldown, validateRequest(MinesStartSchema), async (req, res) => {
+app.post('/api/mines/start', authenticateToken, lockUserAction, validateRequest(MinesStartSchema), async (req, res) => {
     try {
         const { amount, minesCount } = req.body;
         const user = await processTransaction(req.user.id, -amount, 'BET', 'MINES');
@@ -888,7 +914,7 @@ app.post('/api/mines/start', authenticateToken, checkActionCooldown, validateReq
     } catch(e) { res.status(400).json({ message: e.message }); }
 });
 
-app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req, res) => {
+app.post('/api/mines/reveal', authenticateToken, lockUserAction, async (req, res) => {
     try {
         const { tileId } = req.body;
         const user = await User.findById(req.user.id).select('+activeGame.minesList');
@@ -940,7 +966,7 @@ app.post('/api/mines/reveal', authenticateToken, checkActionCooldown, async (req
     } catch(e) { res.status(500).json({message:e.message}); }
 });
 
-app.post('/api/mines/cashout', authenticateToken, checkActionCooldown, async (req, res) => {
+app.post('/api/mines/cashout', authenticateToken, lockUserAction, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select('+activeGame.minesList');
         if(!user || user.activeGame.type !== 'MINES') return res.status(400).json({message:'Inválido'});
@@ -953,7 +979,7 @@ app.post('/api/mines/cashout', authenticateToken, checkActionCooldown, async (re
     } catch(e) { res.status(500).json({message:e.message}); }
 });
 
-app.post('/api/tiger/spin', authenticateToken, checkActionCooldown, validateRequest(BetSchema), async (req, res) => {
+app.post('/api/tiger/spin', authenticateToken, lockUserAction, validateRequest(BetSchema), async (req, res) => {
     try {
         const { amount } = req.body;
         const user = await processTransaction(req.user.id, -amount, 'BET', 'TIGER');
