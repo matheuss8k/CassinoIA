@@ -12,7 +12,7 @@ const getApiUrl = () => {
 };
 
 const API_URL = getApiUrl();
-const CLIENT_VERSION = 'v2.8.2'; 
+const CLIENT_VERSION = 'v2.9.6'; 
 
 let _accessToken: string | null = null;
 
@@ -195,6 +195,12 @@ export const DatabaseService = {
 
   blackjackInsurance: async (userId: string, buyInsurance: boolean) => {
       const response = await fetchWithRetry(`${API_URL}/blackjack/insurance`, { method: 'POST', body: JSON.stringify({ userId, buyInsurance }) });
+      return handleResponse(response);
+  },
+
+  // --- FUNÇÃO PARA FORFEIT (PUNIÇÃO POR ABANDONO) ---
+  forfeitGame: async (gameType: 'BLACKJACK' | 'MINES' | 'TIGER') => {
+      const response = await fetchWithRetry(`${API_URL}/game/forfeit`, { method: 'POST', body: JSON.stringify({ game: gameType }) });
       return handleResponse(response);
   },
 

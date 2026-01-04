@@ -631,11 +631,6 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
                              TIGRINHO <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-yellow-500 to-yellow-600">IA</span>
                          </h1>
                     </div>
-                    <div className="flex items-center justify-center gap-2 mt-7 opacity-80">
-                        <div className="h-[1px] w-12 bg-gradient-to-r from-transparent to-yellow-500/50"></div>
-                        <span className="text-[10px] uppercase tracking-[0.3em] text-yellow-500/80 font-bold px-2 md:px-4">Premium Edition</span>
-                        <div className="h-[1px] w-12 bg-gradient-to-l from-transparent to-yellow-500/50"></div>
-                    </div>
             </div>
 
             <div className="flex-1 w-full max-w-[1600px] flex flex-col xl:flex-row items-center justify-center gap-8 relative p-4 min-h-0 pt-32 md:pt-28">

@@ -277,6 +277,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   
   const isMounted = useRef(true);
   const hasRestored = useRef(false);
+  const statusRef = useRef<GameStatus>(GameStatus.Idle); // For cleanup callback
 
   // Computed Total Bet for Display (Sidebar) - ALWAYS visible and accurate
   const totalBetInGame = useMemo(() => {
@@ -285,7 +286,19 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
 
   useEffect(() => {
       isMounted.current = true;
-      return () => { isMounted.current = false; };
+      statusRef.current = status;
+  }, [status]);
+
+  // Cleanup: PUNISH ON LEAVE
+  useEffect(() => {
+      return () => {
+          isMounted.current = false;
+          // Se o jogo estiver ativo ao sair do componente, PUNIR
+          if (statusRef.current === GameStatus.Dealing || statusRef.current === GameStatus.Playing || statusRef.current === GameStatus.Insurance) {
+              console.log("Abandoning game - Forfeiting...");
+              DatabaseService.forfeitGame('BLACKJACK').catch(e => console.error("Forfeit failed", e));
+          }
+      };
   }, []);
 
   // Restore Session
@@ -294,25 +307,16 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       hasRestored.current = true;
 
       if (user.activeGame && user.activeGame.type === 'BLACKJACK') {
-          const game = user.activeGame;
-          setBet(game.bet);
-          if (game.sideBets) setSideBets(game.sideBets);
-          if (game.insuranceBet) setInsuranceBet(game.insuranceBet);
+          // PUNIR SE DETECTAR JOGO PRESO NO RELOAD (F5)
+          // O usuário pediu especificamente: "ao voltar no jogo ainda fica a partida rolando, ela precisa ser finalizada e punir"
+          console.log("Stale game detected on load. Punishing...");
+          DatabaseService.forfeitGame('BLACKJACK').then((data: any) => {
+              if (data.newBalance !== undefined) updateUser({ balance: data.newBalance });
+              setNotifyMsg("Você abandonou a partida anterior. Derrota registrada.");
+              setStatus(GameStatus.Idle);
+          }).catch(e => console.error(e));
           
-          if (game.bjPlayerHand) setPlayerHand(game.bjPlayerHand);
-          if (game.bjDealerHand) {
-              const visibleDealer = (game.bjStatus === 'PLAYING' || game.bjStatus === 'INSURANCE')
-                 ? [game.bjDealerHand[0], { ...game.bjDealerHand[1], isHidden: true }]
-                 : game.bjDealerHand;
-              setDealerHand(visibleDealer);
-          }
-          if (game.publicSeed) setServerSeedHash(game.publicSeed);
-          
-          if (game.bjStatus === 'INSURANCE') {
-              setStatus(GameStatus.Insurance);
-          } else {
-              setStatus(GameStatus.Playing);
-          }
+          return; // Não restaura, mata o jogo.
       }
   }, []); // Run once
 
@@ -493,6 +497,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
               updateUser({ balance: currentBalance - cost }); 
           }
 
+          // Use o novo endpoint corrigido
           const data: any = await DatabaseService.blackjackInsurance(user.id, buy);
           if (!isMounted.current) return;
           setIsProcessing(false);
