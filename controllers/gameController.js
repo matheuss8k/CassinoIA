@@ -1,24 +1,18 @@
 
 const crypto = require('crypto');
 const { User } = require('../models');
-const { processTransaction, saveGameLog, calculateRisk, GameStateManager, UserCache } = require('../engine');
+const { processTransaction, saveGameLog, calculateRisk, GameStateHelper } = require('../engine');
 const { secureShuffle, secureRandomInt, secureRandomFloat, generateSeed, logGameResult } = require('../utils');
 
 // --- HELPER: GET USER GAME STATE ---
 const getActiveGame = async (userId, gameType) => {
-    // 1. Try Redis (Primary "Live" State)
-    let gameState = await GameStateManager.get(userId);
+    // Direct DB Read - Strong Consistency
+    const user = await User.findById(userId).select('+activeGame.bjDeck +activeGame.minesList');
     
-    // 2. If Redis empty, check Mongo (Crash Recovery)
-    if (!gameState) {
-        const user = await User.findById(userId).select('+activeGame.bjDeck +activeGame.minesList');
-        if (user && user.activeGame && user.activeGame.type === gameType) {
-            gameState = user.activeGame.toObject();
-        }
+    if (user && user.activeGame && user.activeGame.type === gameType) {
+        return user.activeGame.toObject();
     }
-
-    if (!gameState || gameState.type !== gameType) return null;
-    return gameState;
+    return null;
 };
 
 // --- BLACKJACK LOGIC ---
@@ -62,17 +56,16 @@ const blackjackDeal = async (req, res) => {
         const gameState = { type: 'BLACKJACK', bet: amount, sideBets, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: status, riskLevel: risk.level, serverSeed };
 
         let user;
+        // NOTE: processTransaction returns user object with attached lastTransactionId
         if (status === 'GAME_OVER') {
              user = await processTransaction(req.user.id, -totalBet, 'BET', 'BLACKJACK', null, null); 
              if (payout > 0) user = await processTransaction(req.user.id, payout, 'WIN', 'BLACKJACK');
              
              logGameResult('BLACKJACK', user.username, payout - totalBet, user.sessionProfit, risk.level, engineAdjustment);
-             await saveGameLog(user._id, 'BLACKJACK', totalBet, payout, { pScore, dScore, result }, risk.level, engineAdjustment);
+             await saveGameLog(user._id, 'BLACKJACK', totalBet, payout, { pScore, dScore, result }, risk.level, engineAdjustment, user.lastTransactionId);
              await User.updateOne({ _id: user._id }, { $set: { lastBetResult: payout > 0 ? 'WIN' : 'LOSS', previousBet: amount, activeGame: { type: 'NONE' } } });
         } else {
              user = await processTransaction(req.user.id, -totalBet, 'BET', 'BLACKJACK', null, gameState);
-             // Initial Save needs Mongo Persist for recovery
-             await GameStateManager.save(req.user.id, gameState, true);
         }
         
         res.json({ playerHand: pHand, dealerHand: status!=='GAME_OVER'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: user.balance, sideBetWin: 0, publicSeed });
@@ -106,14 +99,12 @@ const blackjackHit = async (req, res) => {
             await User.updateOne({ _id: req.user.id }, { $set: { lastBetResult: 'LOSS', previousBet: g.bet, activeGame: { type: 'NONE' } }, $inc: { consecutiveLosses: 1 }, $set: { consecutiveWins: 0 } });
             logGameResult('BLACKJACK', req.user.username, -g.bet, 0, g.riskLevel, engineAdjustment);
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, 0, { result: 'BUST' }, g.riskLevel, engineAdjustment);
-            await GameStateManager.clear(req.user.id);
+            await GameStateHelper.clear(req.user.id);
         } else {
-            // OPTIMIZATION: Intermediate moves save ONLY to Redis
-            await GameStateManager.save(req.user.id, g, false);
+            await GameStateHelper.save(req.user.id, g);
         }
         
-        // OPTIMIZATION: Read balance from Cache, not Mongo
-        const balance = await UserCache.getBalance(req.user.id);
+        const balance = (await User.findById(req.user.id).select('balance')).balance;
         res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
@@ -148,16 +139,15 @@ const blackjackStand = async (req, res) => {
             user = await processTransaction(req.user.id, payout, 'WIN', 'BLACKJACK');
             await User.updateOne({ _id: req.user.id }, { lastBetResult: 'WIN', previousBet: g.bet, activeGame: { type: 'NONE' }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } });
         } else {
-            user = await User.findById(req.user.id); // Just fetch needed if no tx
+            user = await User.findById(req.user.id); 
             await User.updateOne({ _id: req.user.id }, { lastBetResult: 'LOSS', previousBet: g.bet, activeGame: { type: 'NONE' }, $inc: { consecutiveLosses: 1 }, $set: { consecutiveWins: 0 } });
         }
         
         logGameResult('BLACKJACK', req.user.username, payout - g.bet, 0, g.riskLevel, engineAdjustment);
-        await saveGameLog(req.user.id, 'BLACKJACK', g.bet, payout, { dScore, pScore, result }, g.riskLevel, engineAdjustment);
-        await GameStateManager.clear(req.user.id);
+        await saveGameLog(req.user.id, 'BLACKJACK', g.bet, payout, { dScore, pScore, result }, g.riskLevel, engineAdjustment, user.lastTransactionId);
+        await GameStateHelper.clear(req.user.id);
         
-        const balance = await UserCache.getBalance(req.user.id);
-        res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: balance });
+        res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: user.balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -195,14 +185,13 @@ const blackjackInsurance = async (req, res) => {
                 await User.updateOne({ _id: req.user.id }, { $inc: { consecutiveLosses: 1 }, $set: { consecutiveWins: 0, lastBetResult: 'LOSS' } });
             }
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, mainPayout + insuranceWin, { result, dealerHasBJ: true }, g.riskLevel, null);
-            await GameStateManager.clear(req.user.id);
+            await GameStateHelper.clear(req.user.id);
         } else {
             g.bjStatus = status;
-            // Insurance is a state change, but game continues. No need to persist heavily.
-            await GameStateManager.save(req.user.id, g, false);
+            await GameStateHelper.save(req.user.id, g);
         }
 
-        const balance = await UserCache.getBalance(req.user.id);
+        const balance = (await User.findById(req.user.id).select('balance')).balance;
         res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: balance, insuranceWin });
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
@@ -218,9 +207,8 @@ const minesStart = async (req, res) => {
         
         const gameState = { type: 'MINES', bet: amount, minesCount, minesList: Array.from(minesSet), minesRevealed: [], minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed };
         
+        // Save Game State + Deduct Balance Atomic
         const user = await processTransaction(req.user.id, -amount, 'BET', 'MINES', null, gameState);
-        // Initial save needs mongo persist
-        await GameStateManager.save(req.user.id, gameState, true);
         
         const publicSeed = crypto.createHash('sha256').update(serverSeed).digest('hex');
         res.json({ success: true, newBalance: user.balance, publicSeed });
@@ -234,8 +222,7 @@ const minesReveal = async (req, res) => {
         if(!g) return res.status(400).json({message:'Inv'});
         
         if (g.minesRevealed.includes(tileId)) {
-             // OPTIMIZATION: Read from cache
-             const balance = await UserCache.getBalance(req.user.id);
+             const balance = (await User.findById(req.user.id).select('balance')).balance;
              return res.json({outcome:'GEM', status:'PLAYING', newBalance: balance});
         }
         
@@ -254,9 +241,8 @@ const minesReveal = async (req, res) => {
             await User.updateOne({ _id: req.user.id }, { lastBetResult: 'LOSS', previousBet: g.bet, activeGame: { type: 'NONE' }, consecutiveLosses: 1, consecutiveWins: 0 });
             logGameResult('MINES', req.user.username, -g.bet, 0, g.riskLevel, adjustmentLog);
             await saveGameLog(req.user.id, 'MINES', g.bet, 0, { outcome: 'BOMB', minesCount: g.minesCount }, g.riskLevel, adjustmentLog);
-            await GameStateManager.clear(req.user.id);
-            const balance = await UserCache.getBalance(req.user.id);
-            return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: balance });
+            await GameStateHelper.clear(req.user.id);
+            return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: (await User.findById(req.user.id)).balance });
         }
         
         g.minesRevealed.push(tileId); 
@@ -264,10 +250,9 @@ const minesReveal = async (req, res) => {
         g.minesMultiplier = mult;
         g.minesList = cM;
         
-        // OPTIMIZATION: Intermediate moves save ONLY to Redis (persist = false)
-        await GameStateManager.save(req.user.id, g, false);
+        await GameStateHelper.save(req.user.id, g);
         
-        const balance = await UserCache.getBalance(req.user.id);
+        const balance = (await User.findById(req.user.id).select('balance')).balance;
         res.json({ outcome: 'GEM', status: 'PLAYING', profit: g.bet * mult, multiplier: mult, newBalance: balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
@@ -278,132 +263,80 @@ const minesCashout = async (req, res) => {
         if(!g) return res.status(400).json({message:'Inv'});
         
         const profit = parseFloat((g.bet * g.minesMultiplier).toFixed(2));
-        await processTransaction(req.user.id, profit, 'WIN', 'MINES');
+        const user = await processTransaction(req.user.id, profit, 'WIN', 'MINES');
         await User.updateOne({ _id: req.user.id }, { lastBetResult: 'WIN', previousBet: g.bet, activeGame: { type: 'NONE' }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } });
-        await saveGameLog(req.user.id, 'MINES', g.bet, profit, { outcome: 'CASHOUT', multiplier: g.minesMultiplier }, g.riskLevel, null);
-        await GameStateManager.clear(req.user.id);
+        await saveGameLog(req.user.id, 'MINES', g.bet, profit, { outcome: 'CASHOUT', multiplier: g.minesMultiplier }, g.riskLevel, null, user.lastTransactionId);
+        await GameStateHelper.clear(req.user.id);
         
-        const balance = await UserCache.getBalance(req.user.id);
-        res.json({ success: true, profit, newBalance: balance, mines: g.minesList });
+        res.json({ success: true, profit, newBalance: user.balance, mines: g.minesList });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
 const tigerSpin = async (req, res) => {
     try {
         const { amount } = req.body;
-        const user = await processTransaction(req.user.id, -amount, 'BET', 'TIGER');
+        // Atomic Bet Deduction
+        let user = await processTransaction(req.user.id, -amount, 'BET', 'TIGER');
         const risk = calculateRisk(user, amount);
-        
         let outcome = 'LOSS'; 
         const r = secureRandomFloat();
         let engineAdjustment = null;
-
-        // Base Probabilities
-        let chanceBigWin = 0.04;
-        let chanceSmallWin = 0.20;
-
-        // 1. Weight Reduction in High Risk
-        if (risk.level === 'HIGH' || risk.level === 'EXTREME') {
-            chanceBigWin = 0.0; // Zero chance for big win
-            chanceSmallWin = chanceSmallWin * 0.5; // Reduced by half
-            engineAdjustment = 'RISK_PROTOCOL_ACTIVE';
-        }
-
-        // Determine Base Outcome
-        if (r < chanceBigWin) outcome = 'BIG_WIN';
-        else if (r < (chanceBigWin + chanceSmallWin)) outcome = 'SMALL_WIN';
-
-        // 2. LDW (Loss Disguised as Win)
-        // If it's a loss and high risk, 30% chance to fake a win (return 50% of bet)
-        if (outcome === 'LOSS' && (risk.level === 'HIGH' || risk.level === 'EXTREME')) {
-            if (secureRandomFloat() < 0.30) {
-                outcome = 'LDW';
-                engineAdjustment = 'LDW_TRIGGERED';
-            }
-        }
+        let chanceBigWin = 0.04; 
+        
+        if (risk.level === 'HIGH' || risk.level === 'EXTREME') { chanceBigWin = 0.0; engineAdjustment = 'RTP_ADJUST_1'; }
+        
+        // --- UPDATED LOGIC FOR VOLATILITY SMOOTHING ---
+        // 0.00 - 0.04: BIG_WIN
+        // 0.04 - 0.20: SMALL_WIN
+        // 0.20 - 0.35: TINY_WIN (New 15% range taking from LOSS to return half bet)
+        // 0.35 - 1.00: LOSS
+        if (r < chanceBigWin) outcome = 'BIG_WIN'; 
+        else if (r < 0.20) outcome = 'SMALL_WIN';
+        else if (r < 0.35) outcome = 'TINY_WIN';
 
         let win = 0, grid = [], lines = [], fs = false;
-        const s = ['orange', 'bag', 'firecracker', 'envelope', 'statue', 'jewel']; // Trash/Standard symbols
+        const s = ['orange', 'bag', 'firecracker', 'envelope', 'statue', 'jewel']; 
+        grid = []; for(let i=0; i<9; i++) grid.push(s[secureRandomInt(0, s.length)]); 
         
-        // Helper to generate a random full grid
-        const genRandomGrid = () => {
-             const g = [];
-             for(let i=0; i<9; i++) g.push(s[secureRandomInt(0, s.length)]);
-             return g;
-        };
-
-        if (outcome === 'BIG_WIN') {
-             win = amount * 10;
-             grid = Array(9).fill('wild');
-             fs = true;
-             lines = [0,1,2,3,4];
-        } else if (outcome === 'SMALL_WIN') {
-             win = amount * 1.5;
-             grid = genRandomGrid();
-             // Force a win on top row (Indices 0, 1, 2)
-             grid[0] = 'orange'; grid[1] = 'orange'; grid[2] = 'orange';
-             lines = [0];
-        } else if (outcome === 'LDW') {
-             // Pay back 50% of bet (Loss for player, but visually a "win")
-             win = amount * 0.5;
-             grid = genRandomGrid();
-             // Force a low value win, e.g., 3 lowest symbols on bottom row
-             grid[6] = 'envelope'; grid[7] = 'envelope'; grid[8] = 'envelope';
-             lines = [2];
-        } else {
-             // LOSS
-             win = 0;
-             grid = genRandomGrid();
-             
-             // 3. Near Miss Logic
-             // If loss, generate visually appearing "Almost Win" on Reel 1 and 2
-             if (secureRandomFloat() < 0.40) { // 40% chance of Near Miss on Loss
-                 // Generate Wilds or High Value on Reel 1 (indices 0,3,6) and Reel 2 (1,4,7)
-                 // Payline 2 is Middle Row (Indices 3, 4, 5)
-                 grid[3] = 'wild'; // Reel 1 Middle
-                 grid[4] = 'wild'; // Reel 2 Middle
-                 // Reel 3 Middle (Index 5) must NOT be wild or match to ensure loss
-                 grid[5] = 'bag'; 
-                 engineAdjustment = engineAdjustment ? `${engineAdjustment}_NEAR_MISS` : 'NEAR_MISS';
-             }
+        if (outcome === 'BIG_WIN') { 
+            win = amount * 10; 
+            grid.fill('wild'); 
+            fs=true; 
+            lines=[0,1,2,3,4]; 
+        } else if (outcome === 'SMALL_WIN') { 
+            win = amount * 1.5; 
+            grid[0]='orange'; grid[1]='orange'; grid[2]='orange'; 
+            lines=[0]; 
+        } else if (outcome === 'TINY_WIN') {
+            // Retention Spin: Returns 0.5x bet (Player loses half, but sees a win animation)
+            // Visually: Oranges on Middle Row (Indices 3,4,5)
+            win = amount * 0.5;
+            grid[3] = 'orange'; grid[4] = 'orange'; grid[5] = 'orange';
+            lines = [1];
+            if(!engineAdjustment) engineAdjustment = 'VOLATILITY_SMOOTHING';
         }
 
         if (win > 0) { 
-            await processTransaction(user._id, win, 'WIN', 'TIGER'); 
-            // CRITICAL FIX: Update consecutiveWins and previousBet for Risk Engine
-            await User.updateOne({ _id: user._id }, { 
-                lastBetResult: 'WIN', 
-                previousBet: amount, // For Martingale detection
-                activeGame: { type: 'NONE' },
-                $inc: { consecutiveWins: 1 }, 
-                $set: { consecutiveLosses: 0 }
-            }); 
+            user = await processTransaction(user._id, win, 'WIN', 'TIGER'); 
+            await User.updateOne({ _id: user._id }, { lastBetResult: 'WIN', activeGame: { type: 'NONE' } }); 
         } else {
-            await User.updateOne({ _id: user._id }, { 
-                lastBetResult: 'LOSS', 
-                previousBet: amount, // For Martingale detection
-                activeGame: { type: 'NONE' },
-                $inc: { consecutiveLosses: 1 }, 
-                $set: { consecutiveWins: 0 }
-            }); 
+            await User.updateOne({ _id: user._id }, { lastBetResult: 'LOSS', activeGame: { type: 'NONE' } }); 
         }
         
-        await saveGameLog(user._id, 'TIGER', amount, win, { grid, outcome }, risk.level, engineAdjustment);
-        const balance = await UserCache.getBalance(user._id);
-        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: balance, publicSeed: crypto.randomBytes(16).toString('hex') });
+        await saveGameLog(user._id, 'TIGER', amount, win, { grid, outcome }, risk.level, engineAdjustment, user.lastTransactionId);
+        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: (await User.findById(user._id)).balance, publicSeed: crypto.randomBytes(16).toString('hex') });
     } catch(e) { res.status(400).json({message: e.message}); }
 };
 
 const forfeitGame = async (req, res) => {
     try {
-        await GameStateManager.clear(req.user.id);
+        await GameStateHelper.clear(req.user.id);
         const user = await User.findById(req.user.id);
         if (user.activeGame && user.activeGame.type !== 'NONE') {
             await saveGameLog(user._id, user.activeGame.type, user.activeGame.bet, 0, { result: 'FORFEIT' }, 'NORMAL', 'TIMEOUT');
             await User.updateOne({ _id: user._id }, { $set: { activeGame: { type: 'NONE' }, lastBetResult: 'LOSS' } });
         }
-        const balance = await UserCache.getBalance(req.user.id);
-        res.json({ success: true, newBalance: balance });
+        res.json({ success: true, newBalance: user.balance });
     } catch(e) { res.status(500).json({ message: e.message }); }
 };
 

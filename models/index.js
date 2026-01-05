@@ -64,6 +64,7 @@ transactionSchema.index({ userId: 1, createdAt: -1 });
 // --- GAME LOG SCHEMA ---
 const gameLogSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }, // AUDIT LINK
     game: { type: String, required: true },
     bet: { type: Number, required: true },
     payout: { type: Number, default: 0 },
@@ -75,8 +76,17 @@ const gameLogSchema = new mongoose.Schema({
     engineAdjustment: { type: String }
 }, { timestamps: true });
 
+// --- ACTION LOCK SCHEMA (Mutex) ---
+// BANKING UPGRADE: Increased expiry to 30s to prevent lock-slip on slow DBs.
+// The app manually releases this lock instantly, so this is just a Deadlock Failsafe.
+const actionLockSchema = new mongoose.Schema({
+    _id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, 
+    createdAt: { type: Date, default: Date.now, expires: 30 } 
+});
+
 module.exports = {
     User: mongoose.model('User', userSchema),
     Transaction: mongoose.model('Transaction', transactionSchema),
-    GameLog: mongoose.model('GameLog', gameLogSchema)
+    GameLog: mongoose.model('GameLog', gameLogSchema),
+    ActionLock: mongoose.model('ActionLock', actionLockSchema)
 };

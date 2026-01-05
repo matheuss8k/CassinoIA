@@ -1,6 +1,6 @@
 
 const { User } = require('../models');
-const { processTransaction, GameStateManager, UserCache } = require('../engine');
+const { processTransaction } = require('../engine');
 const { sanitizeUser } = require('./authController');
 
 const getBalance = async (req, res) => {
@@ -28,31 +28,19 @@ const syncUser = async (req, res) => {
     delete user.password;
     delete user.refreshToken;
     
-    let userData = user; // sanitizeUser supports plain objects too
+    let userData = user; 
 
-    // MERGE REDIS STATE
-    try {
-        const redisState = await GameStateManager.get(req.user.id);
-        if (redisState) {
-            // SECURITY: Sanitize sensitive data before sending to client
-            // Never expose serverSeed, full deck, or mine locations
-            const safeState = { ...redisState };
-            delete safeState.serverSeed;
-            delete safeState.bjDeck;
-            delete safeState.minesList;
-            
-            userData.activeGame = safeState;
-        }
-        // CACHE BALANCE SYNC
-        const cachedBalance = await UserCache.getBalance(req.user.id);
-        // If Redis has a newer balance, send that (Display purposes)
-        if (cachedBalance !== undefined && cachedBalance !== userData.balance) {
-             userData.balance = cachedBalance;
-        } else if (cachedBalance === 0 && userData.balance > 0) {
-            // Edge case: Populate cache if empty but DB has funds
-            await UserCache.setBalance(req.user.id, userData.balance);
-        }
-    } catch (e) { console.warn("Redis sync skip"); }
+    // With Redis removed, userData.activeGame is already populated from MongoDB if it exists.
+    // We just need to sanitize it.
+    if (userData.activeGame && userData.activeGame.type !== 'NONE') {
+        const safeState = { ...userData.activeGame };
+        delete safeState.serverSeed;
+        delete safeState.bjDeck;
+        delete safeState.minesList;
+        userData.activeGame = safeState;
+    } else {
+        userData.activeGame = { type: 'NONE' };
+    }
 
     res.json(userData);
 };
