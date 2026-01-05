@@ -280,25 +280,99 @@ const tigerSpin = async (req, res) => {
         const { amount } = req.body;
         const user = await processTransaction(req.user.id, -amount, 'BET', 'TIGER');
         const risk = calculateRisk(user, amount);
+        
         let outcome = 'LOSS'; 
         const r = secureRandomFloat();
         let engineAdjustment = null;
-        let chanceBigWin = 0.04; 
-        
-        if (risk.level === 'HIGH' || risk.level === 'EXTREME') { chanceBigWin = 0.0; engineAdjustment = 'RTP_ADJUST_1'; }
-        if (r < chanceBigWin) outcome = 'BIG_WIN'; else if (r < 0.20) outcome = 'SMALL_WIN';
+
+        // Base Probabilities
+        let chanceBigWin = 0.04;
+        let chanceSmallWin = 0.20;
+
+        // 1. Weight Reduction in High Risk
+        if (risk.level === 'HIGH' || risk.level === 'EXTREME') {
+            chanceBigWin = 0.0; // Zero chance for big win
+            chanceSmallWin = chanceSmallWin * 0.5; // Reduced by half
+            engineAdjustment = 'RISK_PROTOCOL_ACTIVE';
+        }
+
+        // Determine Base Outcome
+        if (r < chanceBigWin) outcome = 'BIG_WIN';
+        else if (r < (chanceBigWin + chanceSmallWin)) outcome = 'SMALL_WIN';
+
+        // 2. LDW (Loss Disguised as Win)
+        // If it's a loss and high risk, 30% chance to fake a win (return 50% of bet)
+        if (outcome === 'LOSS' && (risk.level === 'HIGH' || risk.level === 'EXTREME')) {
+            if (secureRandomFloat() < 0.30) {
+                outcome = 'LDW';
+                engineAdjustment = 'LDW_TRIGGERED';
+            }
+        }
 
         let win = 0, grid = [], lines = [], fs = false;
-        const s = ['orange', 'bag', 'firecracker', 'envelope', 'statue', 'jewel']; 
-        grid = []; for(let i=0; i<9; i++) grid.push(s[secureRandomInt(0, s.length)]); 
-        if (outcome === 'BIG_WIN') { win = amount * 10; grid.fill('wild'); fs=true; lines=[0,1,2,3,4]; }
-        else if (outcome === 'SMALL_WIN') { win = amount * 1.5; grid[0]='orange'; grid[1]='orange'; grid[2]='orange'; lines=[0]; }
+        const s = ['orange', 'bag', 'firecracker', 'envelope', 'statue', 'jewel']; // Trash/Standard symbols
+        
+        // Helper to generate a random full grid
+        const genRandomGrid = () => {
+             const g = [];
+             for(let i=0; i<9; i++) g.push(s[secureRandomInt(0, s.length)]);
+             return g;
+        };
+
+        if (outcome === 'BIG_WIN') {
+             win = amount * 10;
+             grid = Array(9).fill('wild');
+             fs = true;
+             lines = [0,1,2,3,4];
+        } else if (outcome === 'SMALL_WIN') {
+             win = amount * 1.5;
+             grid = genRandomGrid();
+             // Force a win on top row (Indices 0, 1, 2)
+             grid[0] = 'orange'; grid[1] = 'orange'; grid[2] = 'orange';
+             lines = [0];
+        } else if (outcome === 'LDW') {
+             // Pay back 50% of bet (Loss for player, but visually a "win")
+             win = amount * 0.5;
+             grid = genRandomGrid();
+             // Force a low value win, e.g., 3 lowest symbols on bottom row
+             grid[6] = 'envelope'; grid[7] = 'envelope'; grid[8] = 'envelope';
+             lines = [2];
+        } else {
+             // LOSS
+             win = 0;
+             grid = genRandomGrid();
+             
+             // 3. Near Miss Logic
+             // If loss, generate visually appearing "Almost Win" on Reel 1 and 2
+             if (secureRandomFloat() < 0.40) { // 40% chance of Near Miss on Loss
+                 // Generate Wilds or High Value on Reel 1 (indices 0,3,6) and Reel 2 (1,4,7)
+                 // Payline 2 is Middle Row (Indices 3, 4, 5)
+                 grid[3] = 'wild'; // Reel 1 Middle
+                 grid[4] = 'wild'; // Reel 2 Middle
+                 // Reel 3 Middle (Index 5) must NOT be wild or match to ensure loss
+                 grid[5] = 'bag'; 
+                 engineAdjustment = engineAdjustment ? `${engineAdjustment}_NEAR_MISS` : 'NEAR_MISS';
+             }
+        }
 
         if (win > 0) { 
             await processTransaction(user._id, win, 'WIN', 'TIGER'); 
-            await User.updateOne({ _id: user._id }, { lastBetResult: 'WIN', activeGame: { type: 'NONE' } }); 
+            // CRITICAL FIX: Update consecutiveWins and previousBet for Risk Engine
+            await User.updateOne({ _id: user._id }, { 
+                lastBetResult: 'WIN', 
+                previousBet: amount, // For Martingale detection
+                activeGame: { type: 'NONE' },
+                $inc: { consecutiveWins: 1 }, 
+                $set: { consecutiveLosses: 0 }
+            }); 
         } else {
-            await User.updateOne({ _id: user._id }, { lastBetResult: 'LOSS', activeGame: { type: 'NONE' } }); 
+            await User.updateOne({ _id: user._id }, { 
+                lastBetResult: 'LOSS', 
+                previousBet: amount, // For Martingale detection
+                activeGame: { type: 'NONE' },
+                $inc: { consecutiveLosses: 1 }, 
+                $set: { consecutiveWins: 0 }
+            }); 
         }
         
         await saveGameLog(user._id, 'TIGER', amount, win, { grid, outcome }, risk.level, engineAdjustment);

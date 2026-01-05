@@ -538,28 +538,15 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     setDecisionTimer(10);
     setIsProcessing(true); 
 
-    // --- OPTIMISTIC UI: GHOST CARD ---
-    // 1. Play sound immediately
-    playSound('card');
-    
-    // 2. Add "Face Down" card to hand immediately to simulate instant deal
-    // Use a temp ID that won't collide
-    const ghostCard: Card = {
-        rank: Rank.Two, // Value irrelevant, it's hidden
-        suit: Suit.Spades, // Irrelevant
-        value: 0,
-        isHidden: true,
-        id: 'ghost-hit'
-    };
-    setPlayerHand(prev => [...prev, ghostCard]);
-
     try {
         const data = await DatabaseService.blackjackHit(user.id);
         if (!isMounted.current) return;
 
         setIsProcessing(false);
-        // 3. Replace ghost card with real data (React reconciliation handles the flip)
+        
+        // NOW we update state and play sound (Response First)
         setPlayerHand(data.playerHand);
+        playSound('card');
 
         if (data.newBalance !== undefined) updateUser({ balance: data.newBalance, loyaltyPoints: data.loyaltyPoints });
 
