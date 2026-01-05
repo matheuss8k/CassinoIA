@@ -1,6 +1,6 @@
 
 const { User } = require('../models');
-const { processTransaction, GameStateManager } = require('../engine');
+const { processTransaction, GameStateManager, UserCache } = require('../engine');
 const { sanitizeUser } = require('./authController');
 
 const getBalance = async (req, res) => {
@@ -16,10 +16,19 @@ const getBalance = async (req, res) => {
 };
 
 const syncUser = async (req, res) => {
-    const user = await User.findById(req.user.id);
+    // PERFORMANCE: .lean() returns a plain JS object, skipping Mongoose hydration overhead.
+    // This is crucial for the most frequently called endpoint.
+    const user = await User.findById(req.user.id).lean();
     if (!user) return res.sendStatus(404);
     
-    let userData = sanitizeUser(user);
+    // Manual ID adjustment because lean() doesn't convert _id to id automatically like toObject()
+    user.id = user._id;
+    delete user._id;
+    delete user.__v;
+    delete user.password;
+    delete user.refreshToken;
+    
+    let userData = user; // sanitizeUser supports plain objects too
 
     // MERGE REDIS STATE
     try {
@@ -33,6 +42,15 @@ const syncUser = async (req, res) => {
             delete safeState.minesList;
             
             userData.activeGame = safeState;
+        }
+        // CACHE BALANCE SYNC
+        const cachedBalance = await UserCache.getBalance(req.user.id);
+        // If Redis has a newer balance, send that (Display purposes)
+        if (cachedBalance !== undefined && cachedBalance !== userData.balance) {
+             userData.balance = cachedBalance;
+        } else if (cachedBalance === 0 && userData.balance > 0) {
+            // Edge case: Populate cache if empty but DB has funds
+            await UserCache.setBalance(req.user.id, userData.balance);
         }
     } catch (e) { console.warn("Redis sync skip"); }
 

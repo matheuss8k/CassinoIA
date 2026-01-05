@@ -4,23 +4,56 @@ const { User, Transaction, GameLog } = require('../models');
 const { toCents, fromCents, generateHash, logEvent } = require('../utils');
 const { redisClient } = require('../config');
 
+// --- USER CACHE (BANKING GRADE READS) ---
+const UserCache = {
+    getBalance: async (userId) => {
+        // 1. Try Redis (Fast Path)
+        if (redisClient && redisClient.status === 'ready') {
+            const cached = await redisClient.get(`balance:${userId}`);
+            if (cached !== null) return parseFloat(cached);
+        }
+        
+        // 2. Fallback Mongo (Safe Path)
+        const user = await User.findById(userId).select('balance').lean();
+        if (user) {
+            // Self-heal cache
+            if (redisClient && redisClient.status === 'ready') {
+                await redisClient.set(`balance:${userId}`, user.balance, 'EX', 3600); // 1h Cache
+            }
+            return user.balance;
+        }
+        return 0;
+    },
+
+    setBalance: async (userId, newBalance) => {
+        if (redisClient && redisClient.status === 'ready') {
+            await redisClient.set(`balance:${userId}`, newBalance, 'EX', 3600);
+        }
+    },
+    
+    updateSession: async (userId, data) => {
+         if (redisClient && redisClient.status === 'ready') {
+             // Cache specific session fields if needed
+         }
+    }
+};
+
 // --- GAME STATE MANAGER (REDIS + WRITE-BEHIND) ---
 const GameStateManager = {
-    // Save state to Redis AND trigger async Mongo update (Write-Behind)
-    // If Redis is down (Dev mode), save directly to Mongo.
-    save: async (userId, gameState) => {
+    // persistToMongo: FALSE for intermediate moves (Hit, Reveal), TRUE for Start/End
+    save: async (userId, gameState, persistToMongo = false) => {
         if (redisClient && redisClient.status === 'ready') {
             // 1. Write to Redis (Fast, Blocking)
-            await redisClient.set(`gamestate:${userId}`, JSON.stringify(gameState), 'EX', 1800);
+            await redisClient.set(`gamestate:${userId}`, JSON.stringify(gameState), 'EX', 3600); // 1h TTL
             
-            // 2. Write to Mongo (Slow, Non-Blocking/Async)
-            // Fire-and-forget to maintain performance
-            User.updateOne({ _id: userId }, { $set: { activeGame: gameState } })
-                .exec()
-                .catch(err => console.warn(`[Write-Behind] Failed for user ${userId}: ${err.message}`));
+            // 2. Write to Mongo (Conditional)
+            if (persistToMongo) {
+                User.updateOne({ _id: userId }, { $set: { activeGame: gameState } })
+                    .exec()
+                    .catch(err => console.warn(`[Write-Behind] Failed for user ${userId}: ${err.message}`));
+            }
         } else {
-            // Fallback for Dev Mode (No Redis)
-            // Block execution until saved to ensure consistency without Redis cache
+            // Fallback for Dev/Crash Mode (No Redis)
             await User.updateOne({ _id: userId }, { $set: { activeGame: gameState } }).exec();
         }
     },
@@ -40,6 +73,8 @@ const GameStateManager = {
         if (redisClient && redisClient.status === 'ready') {
             await redisClient.del(`gamestate:${userId}`);
         }
+        // Always ensure Mongo is cleared of active game to prevent stuck sessions
+        await User.updateOne({ _id: userId }, { $set: { activeGame: { type: 'NONE' } } }).exec();
     }
 };
 
@@ -77,7 +112,7 @@ const calculateRisk = (user, currentBet) => {
 };
 
 // --- WALLET SERVICE ---
-// Updated to accept 'activeGame' for ATOMIC Start (Fixes Financial Orphanhood)
+// Updated to use UserCache for instant frontend updates
 const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null, initialGameState = null) => {
     const amountCents = toCents(Math.abs(amount));
     const balanceChangeCents = (type === 'BET' || type === 'WITHDRAW') ? -amountCents : amountCents;
@@ -93,7 +128,7 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             const opts = sess ? { session: sess } : {};
             const query = { _id: userId };
             
-            // Optimistic Locking for Balance
+            // Optimistic Locking for Balance (Banking Grade Safety)
             if (balanceChangeCents < 0) {
                 query.balance = { $gte: fromCents(Math.abs(balanceChangeCents)) };
             }
@@ -115,7 +150,7 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
                 if (game !== 'WALLET') sets.lastGamePlayed = game;
             }
 
-            // ATOMIC START: Save Game State WITH the money deduction
+            // ATOMIC START: Save Game State WITH the money deduction in Mongo (Safety)
             if (initialGameState) {
                 sets.activeGame = initialGameState;
             } else if (game !== 'WALLET' && (type === 'WIN' || type === 'REFUND')) {
@@ -130,6 +165,7 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             const u = await User.findOneAndUpdate(query, update, { new: true, ...opts });
             if (!u) throw new Error('Insufficient Funds or Concurrent Modification');
             
+            // Generate Audit Hash
             const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 }).session(sess);
             const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
             
@@ -146,6 +182,11 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             catch (err) { await session.abortTransaction(); throw err; } 
             finally { session.endSession(); }
         } else { updatedUser = await executeLogic(null); }
+
+        // UPDATE CACHE INSTANTLY (Write-Through)
+        if (updatedUser) {
+            await UserCache.setBalance(userId, updatedUser.balance);
+        }
 
         return updatedUser;
     } catch (e) {
@@ -166,5 +207,6 @@ module.exports = {
     calculateRisk,
     processTransaction,
     saveGameLog,
-    GameStateManager
+    GameStateManager,
+    UserCache
 };

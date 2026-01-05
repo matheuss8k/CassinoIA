@@ -1,7 +1,7 @@
 
 const crypto = require('crypto');
 const { User } = require('../models');
-const { processTransaction, saveGameLog, calculateRisk, GameStateManager } = require('../engine');
+const { processTransaction, saveGameLog, calculateRisk, GameStateManager, UserCache } = require('../engine');
 const { secureShuffle, secureRandomInt, secureRandomFloat, generateSeed, logGameResult } = require('../utils');
 
 // --- HELPER: GET USER GAME STATE ---
@@ -71,7 +71,8 @@ const blackjackDeal = async (req, res) => {
              await User.updateOne({ _id: user._id }, { $set: { lastBetResult: payout > 0 ? 'WIN' : 'LOSS', previousBet: amount, activeGame: { type: 'NONE' } } });
         } else {
              user = await processTransaction(req.user.id, -totalBet, 'BET', 'BLACKJACK', null, gameState);
-             await GameStateManager.save(req.user.id, gameState);
+             // Initial Save needs Mongo Persist for recovery
+             await GameStateManager.save(req.user.id, gameState, true);
         }
         
         res.json({ playerHand: pHand, dealerHand: status!=='GAME_OVER'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: user.balance, sideBetWin: 0, publicSeed });
@@ -107,10 +108,12 @@ const blackjackHit = async (req, res) => {
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, 0, { result: 'BUST' }, g.riskLevel, engineAdjustment);
             await GameStateManager.clear(req.user.id);
         } else {
-            await GameStateManager.save(req.user.id, g);
+            // OPTIMIZATION: Intermediate moves save ONLY to Redis
+            await GameStateManager.save(req.user.id, g, false);
         }
         
-        const balance = (await User.findById(req.user.id).select('balance')).balance;
+        // OPTIMIZATION: Read balance from Cache, not Mongo
+        const balance = await UserCache.getBalance(req.user.id);
         res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
@@ -140,10 +143,12 @@ const blackjackStand = async (req, res) => {
         else if (pScore > dScore) { result = 'WIN'; payout = g.bet * 2; }
         else if (pScore === dScore) { result = 'PUSH'; payout = g.bet; }
 
+        let user;
         if (payout > 0) {
-            await processTransaction(req.user.id, payout, 'WIN', 'BLACKJACK');
+            user = await processTransaction(req.user.id, payout, 'WIN', 'BLACKJACK');
             await User.updateOne({ _id: req.user.id }, { lastBetResult: 'WIN', previousBet: g.bet, activeGame: { type: 'NONE' }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } });
         } else {
+            user = await User.findById(req.user.id); // Just fetch needed if no tx
             await User.updateOne({ _id: req.user.id }, { lastBetResult: 'LOSS', previousBet: g.bet, activeGame: { type: 'NONE' }, $inc: { consecutiveLosses: 1 }, $set: { consecutiveWins: 0 } });
         }
         
@@ -151,7 +156,8 @@ const blackjackStand = async (req, res) => {
         await saveGameLog(req.user.id, 'BLACKJACK', g.bet, payout, { dScore, pScore, result }, g.riskLevel, engineAdjustment);
         await GameStateManager.clear(req.user.id);
         
-        res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: (await User.findById(req.user.id)).balance });
+        const balance = await UserCache.getBalance(req.user.id);
+        res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -192,10 +198,12 @@ const blackjackInsurance = async (req, res) => {
             await GameStateManager.clear(req.user.id);
         } else {
             g.bjStatus = status;
-            await GameStateManager.save(req.user.id, g); // Trigger Write-Behind
+            // Insurance is a state change, but game continues. No need to persist heavily.
+            await GameStateManager.save(req.user.id, g, false);
         }
 
-        res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: (await User.findById(req.user.id)).balance, insuranceWin });
+        const balance = await UserCache.getBalance(req.user.id);
+        res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: balance, insuranceWin });
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -211,7 +219,8 @@ const minesStart = async (req, res) => {
         const gameState = { type: 'MINES', bet: amount, minesCount, minesList: Array.from(minesSet), minesRevealed: [], minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed };
         
         const user = await processTransaction(req.user.id, -amount, 'BET', 'MINES', null, gameState);
-        await GameStateManager.save(req.user.id, gameState);
+        // Initial save needs mongo persist
+        await GameStateManager.save(req.user.id, gameState, true);
         
         const publicSeed = crypto.createHash('sha256').update(serverSeed).digest('hex');
         res.json({ success: true, newBalance: user.balance, publicSeed });
@@ -225,7 +234,8 @@ const minesReveal = async (req, res) => {
         if(!g) return res.status(400).json({message:'Inv'});
         
         if (g.minesRevealed.includes(tileId)) {
-             const balance = (await User.findById(req.user.id).select('balance')).balance;
+             // OPTIMIZATION: Read from cache
+             const balance = await UserCache.getBalance(req.user.id);
              return res.json({outcome:'GEM', status:'PLAYING', newBalance: balance});
         }
         
@@ -245,7 +255,8 @@ const minesReveal = async (req, res) => {
             logGameResult('MINES', req.user.username, -g.bet, 0, g.riskLevel, adjustmentLog);
             await saveGameLog(req.user.id, 'MINES', g.bet, 0, { outcome: 'BOMB', minesCount: g.minesCount }, g.riskLevel, adjustmentLog);
             await GameStateManager.clear(req.user.id);
-            return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: (await User.findById(req.user.id)).balance });
+            const balance = await UserCache.getBalance(req.user.id);
+            return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: balance });
         }
         
         g.minesRevealed.push(tileId); 
@@ -253,9 +264,10 @@ const minesReveal = async (req, res) => {
         g.minesMultiplier = mult;
         g.minesList = cM;
         
-        await GameStateManager.save(req.user.id, g);
+        // OPTIMIZATION: Intermediate moves save ONLY to Redis (persist = false)
+        await GameStateManager.save(req.user.id, g, false);
         
-        const balance = (await User.findById(req.user.id).select('balance')).balance;
+        const balance = await UserCache.getBalance(req.user.id);
         res.json({ outcome: 'GEM', status: 'PLAYING', profit: g.bet * mult, multiplier: mult, newBalance: balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
@@ -271,7 +283,8 @@ const minesCashout = async (req, res) => {
         await saveGameLog(req.user.id, 'MINES', g.bet, profit, { outcome: 'CASHOUT', multiplier: g.minesMultiplier }, g.riskLevel, null);
         await GameStateManager.clear(req.user.id);
         
-        res.json({ success: true, profit, newBalance: (await User.findById(req.user.id)).balance, mines: g.minesList });
+        const balance = await UserCache.getBalance(req.user.id);
+        res.json({ success: true, profit, newBalance: balance, mines: g.minesList });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -376,7 +389,8 @@ const tigerSpin = async (req, res) => {
         }
         
         await saveGameLog(user._id, 'TIGER', amount, win, { grid, outcome }, risk.level, engineAdjustment);
-        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: (await User.findById(user._id)).balance, publicSeed: crypto.randomBytes(16).toString('hex') });
+        const balance = await UserCache.getBalance(user._id);
+        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: balance, publicSeed: crypto.randomBytes(16).toString('hex') });
     } catch(e) { res.status(400).json({message: e.message}); }
 };
 
@@ -388,7 +402,8 @@ const forfeitGame = async (req, res) => {
             await saveGameLog(user._id, user.activeGame.type, user.activeGame.bet, 0, { result: 'FORFEIT' }, 'NORMAL', 'TIMEOUT');
             await User.updateOne({ _id: user._id }, { $set: { activeGame: { type: 'NONE' }, lastBetResult: 'LOSS' } });
         }
-        res.json({ success: true, newBalance: user.balance });
+        const balance = await UserCache.getBalance(req.user.id);
+        res.json({ success: true, newBalance: balance });
     } catch(e) { res.status(500).json({ message: e.message }); }
 };
 
