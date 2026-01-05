@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
-const { IS_PRODUCTION, lockManager } = require('../config');
+const { IS_PRODUCTION, lockManager, redisClient } = require('../config');
 
 // --- SECRETS ---
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || (IS_PRODUCTION ? crypto.randomBytes(64).toString('hex') : 'dev_secret_key_123');
@@ -83,14 +83,40 @@ const lockUserAction = async (req, res, next) => {
 };
 
 const createRateLimiter = ({ windowMs, max }) => {
+    // Memory fallback for Dev/No-Redis environments
     const requests = new Map();
-    setInterval(() => { const now = Date.now(); for (const [k, d] of requests) if (now > d.expiry) requests.delete(k); }, 60000);
-    return (req, res, next) => {
-        let key = req.ip; if (req.user) key = `U:${req.user.id}`;
+    const cleanupInterval = setInterval(() => { 
+        const now = Date.now(); 
+        for (const [k, d] of requests) if (now > d.expiry) requests.delete(k); 
+    }, 60000);
+
+    return async (req, res, next) => {
         if (req.ip === '127.0.0.1') return next();
+        let key = req.ip; 
+        if (req.user) key = `U:${req.user.id}`;
+
+        // 1. Redis Strategy (Production/Scaled)
+        if (redisClient && redisClient.status === 'ready') {
+            const redisKey = `rl:${key}`;
+            try {
+                const count = await redisClient.incr(redisKey);
+                if (count === 1) await redisClient.expire(redisKey, Math.ceil(windowMs / 1000));
+                if (count > max) return res.status(429).json({ message: 'Rate limit exceeded.' });
+                return next();
+            } catch (e) {
+                // If Redis fails, fallback to memory or log error. Proceeding safe.
+                console.error("RateLimit Redis Error:", e.message);
+            }
+        }
+
+        // 2. Memory Strategy (Fallback)
         const now = Date.now();
         if (!requests.has(key)) requests.set(key, { count: 1, expiry: now + windowMs });
-        else { const d = requests.get(key); d.count++; if (d.count > max) return res.status(429).json({ message: 'Rate limit exceeded.' }); }
+        else { 
+            const d = requests.get(key); 
+            d.count++; 
+            if (d.count > max) return res.status(429).json({ message: 'Rate limit exceeded.' }); 
+        }
         next();
     };
 };

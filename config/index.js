@@ -18,106 +18,99 @@ const connectDB = async () => {
   }
 };
 
-// --- LOCK MANAGER (CLUSTER SAFE) ---
-class LockManager {
-    constructor() {
-        this.redis = null;
-        this.memoryLocks = new Map(); 
-        this.useRedis = false; 
-        
-        if (process.env.REDIS_URI) {
-            const redisOptions = {
-                maxRetriesPerRequest: null, 
-                enableReadyCheck: true, 
-                enableOfflineQueue: true,
-                retryStrategy: (times) => Math.min(times * 50, 2000),
-                reconnectOnError: (err) => err.message.includes("READONLY"),
-                connectTimeout: 10000, 
-                keepAlive: 10000, 
-                family: 0 
-            };
+// --- REDIS CLIENT (SINGLETON) ---
+let redisClient = null;
 
-            if (process.env.REDIS_URI.startsWith('rediss://')) {
-                redisOptions.tls = { rejectUnauthorized: false };
-            }
+if (process.env.REDIS_URI) {
+    const redisOptions = {
+        maxRetriesPerRequest: null, 
+        enableReadyCheck: true, 
+        enableOfflineQueue: true,
+        retryStrategy: (times) => Math.min(times * 50, 2000),
+        reconnectOnError: (err) => err.message.includes("READONLY"),
+        connectTimeout: 10000, 
+        keepAlive: 10000, 
+        family: 0 
+    };
 
-            this.redis = new Redis(process.env.REDIS_URI, redisOptions);
-            
-            this.redis.on('connect', () => {
-                this.useRedis = true;
-                if (!IS_PRODUCTION) console.log(`✅ Redis Connected`);
-            });
-
-            this.redis.on('ready', () => { this.useRedis = true; });
-
-            this.redis.on('error', (err) => {
-                if (err.code === 'ECONNRESET') return;
-                console.warn(`[REDIS] Connection issue: ${err.message}`);
-                
-                // CRITICAL SECURITY FOR CLUSTER
-                if (IS_PRODUCTION) {
-                    console.error("🔥 FATAL: Redis connection lost in PRODUCTION. Stopping to prevent double-spending.");
-                    this.useRedis = false; 
-                    // In a real cluster orchestrator, we might want to crash the pod to restart
-                    // process.exit(1); 
-                } else {
-                    this.useRedis = false;
-                }
-            });
-        } else {
-            if (IS_PRODUCTION) {
-                console.error('🔥 FATAL: REDIS_URI missing in PRODUCTION. System cannot guarantee concurrency safety.');
-                process.exit(1); // Force crash if misconfigured in prod
-            } else {
-                console.warn('⚠️  Running in MEMORY MODE (Dev Only).');
-            }
-        }
-
-        // Garbage Collector (Memory Fallback)
-        setInterval(() => {
-            const now = Date.now();
-            for (const [userId, timestamp] of this.memoryLocks.entries()) {
-                if (now - timestamp > 10000) this.memoryLocks.delete(userId); 
-            }
-        }, 5000);
+    if (process.env.REDIS_URI.startsWith('rediss://')) {
+        redisOptions.tls = { rejectUnauthorized: false };
     }
 
+    redisClient = new Redis(process.env.REDIS_URI, redisOptions);
+    
+    redisClient.on('connect', () => {
+        if (!IS_PRODUCTION) console.log(`✅ Redis Connected (State Engine Ready)`);
+    });
+
+    redisClient.on('error', (err) => {
+        if (err.code === 'ECONNRESET') return;
+        console.warn(`[REDIS] Connection issue: ${err.message}`);
+        // In Production Banking Systems: If Redis dies, we must stop accepting bets to prevent state loss.
+        if (IS_PRODUCTION) {
+            console.error("🔥 FATAL: Redis lost. System entering Fail-Safe mode.");
+        }
+    });
+} else {
+    if (IS_PRODUCTION) {
+        console.error('🔥 FATAL: REDIS_URI missing in PRODUCTION. Performance mode disabled.');
+        process.exit(1);
+    } else {
+        console.warn('⚠️  Redis missing. Running in Dev Mode (No Locks).');
+    }
+}
+
+// --- LOCK MANAGER ---
+class LockManager {
+    constructor() {
+        // Architecture Decision: No memory fallback for Production.
+        // Memory locks are not shared across processes/pods, leading to race conditions.
+    }
+
+    /**
+     * Acquires a distributed lock for a user.
+     * Strategy: Redis SET NX (Atomic).
+     * Fail-safe: If Redis is down in Production -> REJECT (Kill Switch).
+     */
     async acquire(userId) {
         const lockKey = `lock:u:${userId}`;
         
-        // Priority 1: Redis (Distributed Atomic Lock)
-        if (this.useRedis && this.redis && this.redis.status === 'ready') {
+        // 1. Primary: Distributed Redis Lock
+        if (redisClient && redisClient.status === 'ready') {
             try {
-                const lockPromise = this.redis.set(lockKey, '1', 'NX', 'PX', 5000);
-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Redis Timeout")), 2000));
-                const result = await Promise.race([lockPromise, timeoutPromise]);
+                // NX = Only set if not exists
+                // PX = Expire in 5000ms (Auto-release if process crashes)
+                const result = await redisClient.set(lockKey, '1', 'NX', 'PX', 5000); 
                 return result === 'OK';
-            } catch (e) { 
-                if (IS_PRODUCTION) return false; // Fail safe in prod
-                return false; 
+            } catch (e) {
+                console.error(`[LOCK_SYS] Redis Error: ${e.message}`);
+                // If Redis errors during operation, assume unsafe state.
+                return false;
             }
         }
 
-        // Priority 2: Memory (Dev Only or Emergency Fallback if allowed)
-        if (IS_PRODUCTION && !this.useRedis) {
-             // If we reached here in production, it means Redis failed and we didn't crash yet.
-             // We must deny lock to be safe.
-             return false; 
+        // 2. Fail-Safe: Production Kill Switch
+        // If Redis is offline in Production, we cannot guarantee atomic transactions.
+        // We MUST halt processing to prevent Double Spending / Race Conditions.
+        if (IS_PRODUCTION) {
+            console.warn(`[LOCK_SYS] Redis Unavailable. Engaging Kill Switch for User ${userId}.`);
+            return false; // Deny service to protect funds
         }
 
-        if (this.memoryLocks.has(userId)) return false;
-        this.memoryLocks.set(userId, Date.now());
-        return true;
+        // 3. Dev Fallback: Allow without lock (High Risk, Dev Only)
+        // WARNING: This allows race conditions in Dev.
+        return true; 
     }
 
     async release(userId) {
-        if (this.useRedis && this.redis && this.redis.status === 'ready') {
-            try { this.redis.del(`lock:u:${userId}`).catch(() => {}); } catch(e) {}
+        if (redisClient && redisClient.status === 'ready') {
+            try { await redisClient.del(`lock:u:${userId}`); } catch(e) {
+                console.warn(`[LOCK_RELEASE_FAIL] ${e.message}`);
+            }
         }
-        this.memoryLocks.delete(userId);
     }
 }
 
 const lockManager = new LockManager();
 
-module.exports = { connectDB, lockManager, IS_PRODUCTION };
+module.exports = { connectDB, lockManager, redisClient, IS_PRODUCTION };

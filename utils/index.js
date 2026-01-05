@@ -6,16 +6,20 @@ const { IS_PRODUCTION } = require('../config');
 // --- LOGGER ---
 const logEvent = (type, message) => {
     if (process.env.SILENT_LOGS) return;
-    const ts = new Date().toISOString();
-    if (type === 'METRIC') { 
-        if (!IS_PRODUCTION) console.log(`\x1b[33m[${ts}] [METRIC] ${message}\x1b[0m`);
-    } else if (type === 'AUDIT') {
-        console.log(`\x1b[36m[${ts}] [AUDIT] ${message}\x1b[0m`);
-    } else if (type === 'ERROR') {
-        console.error(`\x1b[31m[${ts}] [ERR] ${message}\x1b[0m`);
-    } else {
-        console.log(`[${ts}] [${type}] ${message}`);
-    }
+    
+    // Async Logging: Unblock Event Loop
+    setImmediate(() => {
+        const ts = new Date().toISOString();
+        if (type === 'METRIC') { 
+            if (!IS_PRODUCTION) console.log(`\x1b[33m[${ts}] [METRIC] ${message}\x1b[0m`);
+        } else if (type === 'AUDIT') {
+            console.log(`\x1b[36m[${ts}] [AUDIT] ${message}\x1b[0m`);
+        } else if (type === 'ERROR') {
+            console.error(`\x1b[31m[${ts}] [ERR] ${message}\x1b[0m`);
+        } else {
+            console.log(`[${ts}] [${type}] ${message}`);
+        }
+    });
 };
 
 const logGameResult = (gameName, username, resultAmount, currentSessionNet, riskLevel, adjustmentTag) => {

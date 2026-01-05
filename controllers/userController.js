@@ -1,6 +1,6 @@
 
 const { User } = require('../models');
-const { processTransaction } = require('../engine');
+const { processTransaction, GameStateManager } = require('../engine');
 const { sanitizeUser } = require('./authController');
 
 const getBalance = async (req, res) => {
@@ -18,7 +18,25 @@ const getBalance = async (req, res) => {
 const syncUser = async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.sendStatus(404);
-    res.json(sanitizeUser(await User.findById(req.user.id)));
+    
+    let userData = sanitizeUser(user);
+
+    // MERGE REDIS STATE
+    try {
+        const redisState = await GameStateManager.get(req.user.id);
+        if (redisState) {
+            // SECURITY: Sanitize sensitive data before sending to client
+            // Never expose serverSeed, full deck, or mine locations
+            const safeState = { ...redisState };
+            delete safeState.serverSeed;
+            delete safeState.bjDeck;
+            delete safeState.minesList;
+            
+            userData.activeGame = safeState;
+        }
+    } catch (e) { console.warn("Redis sync skip"); }
+
+    res.json(userData);
 };
 
 const updateAvatar = async (req, res) => {

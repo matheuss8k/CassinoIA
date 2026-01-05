@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Card, GameStatus, GameResult, User, SideBets } from '../types';
+import { Card, GameStatus, GameResult, User, SideBets, Suit, Rank } from '../types';
 import { calculateScore } from '../services/gameLogic';
 import { CardComponent } from './CardComponent';
 import { GameControls } from './GameControls';
 import { AISuggestion } from './AISuggestion';
 import { DatabaseService } from '../services/database'; 
-import { Info, Lock, ShieldCheck, History as HistoryIcon, Maximize2, Calendar, X, ShieldAlert, Heart, Skull, TrendingUp, TrendingDown } from 'lucide-react';
+import { Info, Lock, ShieldCheck, History as HistoryIcon, Maximize2, Calendar, X, ShieldAlert, Heart, Skull, TrendingUp, TrendingDown, WifiOff, RefreshCcw } from 'lucide-react';
 import { Notification } from './UI/Notification';
 import { ProvablyFairModal } from './UI/ProvablyFairModal';
 import { Button } from './UI/Button';
@@ -265,6 +265,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [decisionTimer, setDecisionTimer] = useState<number>(10);
+  const [fatalError, setFatalError] = useState<boolean>(false); // NEW: Fatal Error State
   
   const [showProvablyFair, setShowProvablyFair] = useState(false);
   const [serverSeedHash, setServerSeedHash] = useState('');
@@ -323,7 +324,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   // Timer Logic
   useEffect(() => {
     let timer: number;
-    if (status === GameStatus.Playing) {
+    if (status === GameStatus.Playing && !fatalError) {
       if (decisionTimer > 0) {
         timer = window.setTimeout(() => setDecisionTimer(prev => prev - 1), 1000);
       } else {
@@ -331,7 +332,11 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       }
     }
     return () => clearTimeout(timer);
-  }, [decisionTimer, status]);
+  }, [decisionTimer, status, fatalError]);
+
+  const handleForceReload = () => {
+      window.location.reload();
+  };
 
   const playSound = useCallback((type: 'chip' | 'card' | 'win' | 'lose' | 'alert') => {
       if (isMounted.current) playSynthSound(type);
@@ -347,10 +352,11 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     setInsuranceBet(0); // Reset Insurance
     setAccumulatedWin(0); // Reset Win Accumulator
     setIsProcessing(false);
+    setFatalError(false);
   }, []);
 
   const handleBet = useCallback((amount: number) => {
-    if (isProcessing) return;
+    if (isProcessing || fatalError) return;
     if (amount === 0) { setBet(0); setSideBets({ perfectPairs: 0, dealerBust: 0 }); return; }
     const potentialBet = bet + amount;
     
@@ -368,7 +374,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     } else {
       setNotifyMsg("Saldo insuficiente para esta aposta.");
     }
-  }, [bet, isProcessing, user.balance, playSound]);
+  }, [bet, isProcessing, user.balance, playSound, fatalError]);
 
   const handleSideBetAction = useCallback((type: 'perfectPairs' | 'dealerBust', action: 'toggle' | 'double' | 'clear') => {
       if (bet === 0) { setNotifyMsg("Faça uma aposta principal primeiro."); return; }
@@ -400,7 +406,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
 
   const dealCards = async () => {
     const totalBet = bet + sideBets.perfectPairs + sideBets.dealerBust;
-    if (bet === 0 || isProcessing) return;
+    if (bet === 0 || isProcessing || fatalError) return;
     if (bet < MIN_BET) return;
     if (totalBet > user.balance) return setNotifyMsg("Saldo insuficiente.");
 
@@ -432,20 +438,20 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         setPlayerHand([]);
         setDealerHand([]);
 
-        // Sequential Deal Animation
+        // Sequential Deal Animation - OPTIMIZED SPEED (500ms intervals for slower distribution)
         const dealSequence = async () => {
              if (!isMounted.current) return;
              playSound('card'); 
              setPlayerHand([pHand[0]]); 
-             await new Promise(r => setTimeout(r, 300));
+             await new Promise(r => setTimeout(r, 500));
              
              if (!isMounted.current) return;
              setDealerHand([dHand[0]]); playSound('card');
-             await new Promise(r => setTimeout(r, 300));
+             await new Promise(r => setTimeout(r, 500));
              
              if (!isMounted.current) return;
              setPlayerHand([pHand[0], pHand[1]]); playSound('card');
-             await new Promise(r => setTimeout(r, 300));
+             await new Promise(r => setTimeout(r, 500));
              
              if (!isMounted.current) return;
              // Only deal the visible part of dealer's second card (which is usually hidden back)
@@ -453,7 +459,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
              setDealerHand([dHand[0], dHand[1]]); playSound('card');
 
              if (data.status === 'GAME_OVER') {
-                 await new Promise(r => setTimeout(r, 400));
+                 await new Promise(r => setTimeout(r, 500));
                  if (!isMounted.current) return;
                  // Reveal dealer hole card if needed
                  if (data.dealerHand[1].isHidden === false && dHand[1].isHidden === true) {
@@ -462,7 +468,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
                  endGame(data.result);
              } else if (data.status === 'INSURANCE') {
                  // INSURANCE PATH: Force status update and halt
-                 await new Promise(r => setTimeout(r, 400));
+                 await new Promise(r => setTimeout(r, 500));
                  if (!isMounted.current) return;
                  setStatus(GameStatus.Insurance);
                  playSound('alert');
@@ -528,17 +534,32 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
   };
 
   const handleHit = async () => {
-    if (status !== GameStatus.Playing || isProcessing) return;
+    if (status !== GameStatus.Playing || isProcessing || fatalError) return;
     setDecisionTimer(10);
     setIsProcessing(true); 
+
+    // --- OPTIMISTIC UI: GHOST CARD ---
+    // 1. Play sound immediately
+    playSound('card');
+    
+    // 2. Add "Face Down" card to hand immediately to simulate instant deal
+    // Use a temp ID that won't collide
+    const ghostCard: Card = {
+        rank: Rank.Two, // Value irrelevant, it's hidden
+        suit: Suit.Spades, // Irrelevant
+        value: 0,
+        isHidden: true,
+        id: 'ghost-hit'
+    };
+    setPlayerHand(prev => [...prev, ghostCard]);
 
     try {
         const data = await DatabaseService.blackjackHit(user.id);
         if (!isMounted.current) return;
 
         setIsProcessing(false);
+        // 3. Replace ghost card with real data (React reconciliation handles the flip)
         setPlayerHand(data.playerHand);
-        playSound('card');
 
         if (data.newBalance !== undefined) updateUser({ balance: data.newBalance, loyaltyPoints: data.loyaltyPoints });
 
@@ -546,11 +567,17 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
              setDealerHand(data.dealerHand);
              endGame(data.result);
         }
-    } catch (e) { setIsProcessing(false); } 
+    } catch (e: any) { 
+        // FATAL ROLLBACK VISUAL
+        console.error("Critical Hit Error", e);
+        setFatalError(true);
+        setNotifyMsg("Erro crítico de sincronização.");
+        // We don't just revert the card, we stop the game visually.
+    } 
   };
 
   const handleStand = async () => {
-    if (isProcessing) return;
+    if (isProcessing || fatalError) return;
     setIsProcessing(true);
     try {
         const data: any = await DatabaseService.blackjackStand(user.id);
@@ -572,16 +599,16 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
              if (currentDealer.length >= 2) {
                   currentDealer[1] = finalDealerHand[1]; 
                   setDealerHand([...currentDealer]);     
-                  await new Promise(r => setTimeout(r, 500));
+                  await new Promise(r => setTimeout(r, 400));
                   if (!isMounted.current) return;
              }
 
-             // Deal remaining cards - ACELERADO (600ms)
+             // Deal remaining cards - ACCELERATED (400ms)
              for (let i = currentDealer.length; i < finalDealerHand.length; i++) {
                   currentDealer.push(finalDealerHand[i]);
                   setDealerHand([...currentDealer]);
                   playSound('card');
-                  await new Promise(r => setTimeout(r, 600));
+                  await new Promise(r => setTimeout(r, 400));
                   if (!isMounted.current) return;
              }
 
@@ -590,7 +617,11 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         }
         animateDealerTurn();
 
-    } catch (e) { setIsProcessing(false); }
+    } catch (e) { 
+        setFatalError(true);
+        setNotifyMsg("Erro de comunicação.");
+        setIsProcessing(false); 
+    }
   };
 
   const endGame = (res: GameResult) => {
@@ -664,6 +695,26 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       (result === GameResult.PlayerWin && playerScore === 21)
   );
   
+  // --- FATAL ERROR MODAL ---
+  if (fatalError) {
+      return (
+          <div className="absolute inset-0 z-[999] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-fade-in">
+              <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-8 max-w-sm text-center shadow-2xl">
+                  <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/30">
+                      <WifiOff size={32} className="text-red-500 animate-pulse" />
+                  </div>
+                  <h2 className="text-2xl font-black text-white mb-2 uppercase">Erro de Sincronização</h2>
+                  <p className="text-slate-400 text-sm mb-6">
+                      Houve uma falha na comunicação com o servidor de jogo. Para sua segurança, a mesa precisa ser recarregada.
+                  </p>
+                  <Button fullWidth onClick={handleForceReload} variant="danger" className="py-4">
+                      <RefreshCcw size={18} className="mr-2" /> RECARREGAR MESA
+                  </Button>
+              </div>
+          </div>
+      );
+  }
+
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
       <Notification message={notifyMsg} onClose={() => setNotifyMsg(null)} />

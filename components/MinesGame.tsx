@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { User, GameStatus } from '../types';
 import { DatabaseService } from '../services/database';
 import { Button } from './UI/Button';
-import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull, Loader2, ShieldCheck } from 'lucide-react';
+import { Diamond, Bomb, Volume2, VolumeX, Lock, Trophy, BrainCircuit, Scan, Sparkles, Info, X, Skull, Loader2, ShieldCheck, WifiOff, RefreshCcw } from 'lucide-react';
 import { Notification } from './UI/Notification';
 import { ProvablyFairModal } from './UI/ProvablyFairModal';
 
@@ -119,6 +119,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [profit, setProfit] = useState<number>(0);
   const [currentMultiplier, setCurrentMultiplier] = useState<number>(1.0);
+  const [fatalError, setFatalError] = useState<boolean>(false); // NEW: Fatal Error State
   
   const nextMultiplierPreview = useMemo(() => 
     getMinesMultiplierPreview(mineCount, revealedCount + 1), 
@@ -201,13 +202,17 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     return 0;
   }, [status, profit, revealedCount, currentMultiplier, bet]);
 
+  const handleForceReload = () => {
+      window.location.reload();
+  };
+
   const playSound = (type: 'gem' | 'bomb' | 'click' | 'cashout' | 'scan') => {
     if (!soundEnabled) return;
     playSynthSound(type);
   };
 
   const handleAskAi = () => {
-      if (status !== GameStatus.Playing || isAiScanning) return;
+      if (status !== GameStatus.Playing || isAiScanning || fatalError) return;
       setIsAiScanning(true);
       setAiSuggestion(null);
       playSound('click');
@@ -224,7 +229,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   };
 
   const handleBetChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (status !== GameStatus.Idle) return;
+      if (status !== GameStatus.Idle || fatalError) return;
       const val = e.target.value;
       
       // Regex para permitir digitação livre mas limitar formato:
@@ -251,6 +256,27 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
       setBetInput(numVal.toFixed(2));
   };
 
+  const adjustBet = (type: 'half' | 'double') => {
+      if (status !== GameStatus.Idle || fatalError) return;
+      let newVal = bet;
+      
+      if (type === 'half') newVal = bet / 2;
+      else newVal = bet * 2;
+
+      // Ensure valid range
+      if (newVal < MIN_BET) newVal = MIN_BET;
+      if (newVal > MAX_BET) newVal = MAX_BET;
+      
+      // Cap at user balance if user has less than calculated bet (but at least MIN_BET)
+      if (newVal > user.balance) newVal = Math.max(MIN_BET, user.balance);
+
+      // Round down to 2 decimals to avoid float issues
+      newVal = Math.floor(newVal * 100) / 100;
+      
+      setBet(newVal);
+      setBetInput(newVal.toFixed(2));
+  };
+
   const startGame = async () => {
     if (gameOverTimeoutRef.current) {
         clearTimeout(gameOverTimeoutRef.current);
@@ -259,6 +285,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     setCashoutWin(null);
     setLossPopup(false);
     setAiSuggestion(null);
+    setFatalError(false);
 
     // Final Validation before start
     const finalBet = bet;
@@ -299,12 +326,12 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   };
 
   const handleTileClick = async (index: number) => {
-    if (status !== GameStatus.Playing || grid[index].isRevealed || isProcessing || loadingTileId !== null) return;
+    if (status !== GameStatus.Playing || grid[index].isRevealed || isProcessing || loadingTileId !== null || fatalError) return;
 
-    // IMMEDIATE FEEDBACK
+    // --- INSTANT FEEDBACK ---
     setLoadingTileId(index);
     if (aiSuggestion !== null) setAiSuggestion(null);
-
+    
     try {
         const result = await DatabaseService.minesReveal(user.id, index);
         if(!isMounted.current) return;
@@ -367,7 +394,10 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             setProfit(0);
             setGrid(Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' as const })));
         } else {
-            setNotifyMsg(error.message || "Erro de conexão.");
+            // FATAL ERROR
+            console.error("Fatal Mines Error", error);
+            setFatalError(true);
+            setNotifyMsg("Erro crítico de sincronização.");
         }
     } finally {
         if(isMounted.current) setLoadingTileId(null);
@@ -375,7 +405,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   };
 
   const handleCashout = async () => {
-    if (status !== GameStatus.Playing || isProcessing || loadingTileId !== null) return;
+    if (status !== GameStatus.Playing || isProcessing || loadingTileId !== null || fatalError) return;
     setIsProcessing(true);
     try {
         const result = await DatabaseService.minesCashout(user.id);
@@ -408,20 +438,25 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     }
   };
 
-  const adjustBet = (type: 'half' | 'double') => {
-    if (status === GameStatus.Playing) return;
-    let newVal = bet;
-    if (type === 'half') newVal = Math.max(MIN_BET, bet / 2);
-    else if (type === 'double') {
-        newVal = bet * 2;
-        if (newVal > MAX_BET) newVal = MAX_BET;
-        if (newVal > user.balance) newVal = user.balance; 
-        if (newVal < MIN_BET) newVal = MIN_BET;
-    }
-    newVal = parseFloat(newVal.toFixed(2));
-    setBet(newVal);
-    setBetInput(newVal.toFixed(2));
-  };
+  // --- FATAL ERROR MODAL ---
+  if (fatalError) {
+      return (
+          <div className="absolute inset-0 z-[999] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-fade-in">
+              <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-8 max-w-sm text-center shadow-2xl">
+                  <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/30">
+                      <WifiOff size={32} className="text-red-500 animate-pulse" />
+                  </div>
+                  <h2 className="text-2xl font-black text-white mb-2 uppercase">Erro de Sincronização</h2>
+                  <p className="text-slate-400 text-sm mb-6">
+                      Houve uma falha na comunicação com o servidor de jogo. Para sua segurança, a mesa precisa ser recarregada.
+                  </p>
+                  <Button fullWidth onClick={handleForceReload} variant="danger" className="py-4">
+                      <RefreshCcw size={18} className="mr-2" /> RECARREGAR MESA
+                  </Button>
+              </div>
+          </div>
+      );
+  }
 
   return (
     <div className="w-full min-h-[calc(100vh-80px)] flex flex-col items-center justify-center p-4 relative animate-fade-in pt-16 md:pt-20 pb-0">

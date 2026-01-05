@@ -2,6 +2,46 @@
 const mongoose = require('mongoose');
 const { User, Transaction, GameLog } = require('../models');
 const { toCents, fromCents, generateHash, logEvent } = require('../utils');
+const { redisClient } = require('../config');
+
+// --- GAME STATE MANAGER (REDIS + WRITE-BEHIND) ---
+const GameStateManager = {
+    // Save state to Redis AND trigger async Mongo update (Write-Behind)
+    // If Redis is down (Dev mode), save directly to Mongo.
+    save: async (userId, gameState) => {
+        if (redisClient && redisClient.status === 'ready') {
+            // 1. Write to Redis (Fast, Blocking)
+            await redisClient.set(`gamestate:${userId}`, JSON.stringify(gameState), 'EX', 1800);
+            
+            // 2. Write to Mongo (Slow, Non-Blocking/Async)
+            // Fire-and-forget to maintain performance
+            User.updateOne({ _id: userId }, { $set: { activeGame: gameState } })
+                .exec()
+                .catch(err => console.warn(`[Write-Behind] Failed for user ${userId}: ${err.message}`));
+        } else {
+            // Fallback for Dev Mode (No Redis)
+            // Block execution until saved to ensure consistency without Redis cache
+            await User.updateOne({ _id: userId }, { $set: { activeGame: gameState } }).exec();
+        }
+    },
+
+    // Get state from Redis or Mongo
+    get: async (userId) => {
+        if (redisClient && redisClient.status === 'ready') {
+            const data = await redisClient.get(`gamestate:${userId}`);
+            return data ? JSON.parse(data) : null;
+        }
+        // Fallback for Dev Mode
+        return null;
+    },
+
+    // Clear state from Redis
+    clear: async (userId) => {
+        if (redisClient && redisClient.status === 'ready') {
+            await redisClient.del(`gamestate:${userId}`);
+        }
+    }
+};
 
 // --- RISK ENGINE ---
 const calculateRisk = (user, currentBet) => {
@@ -37,7 +77,8 @@ const calculateRisk = (user, currentBet) => {
 };
 
 // --- WALLET SERVICE ---
-const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null) => {
+// Updated to accept 'activeGame' for ATOMIC Start (Fixes Financial Orphanhood)
+const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null, initialGameState = null) => {
     const amountCents = toCents(Math.abs(amount));
     const balanceChangeCents = (type === 'BET' || type === 'WITHDRAW') ? -amountCents : amountCents;
     const profitChangeCents = (type === 'WIN') ? amountCents : (type === 'BET') ? -amountCents : 0;
@@ -51,19 +92,39 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
         const executeLogic = async (sess) => {
             const opts = sess ? { session: sess } : {};
             const query = { _id: userId };
+            
+            // Optimistic Locking for Balance
             if (balanceChangeCents < 0) {
                 query.balance = { $gte: fromCents(Math.abs(balanceChangeCents)) };
             }
 
             const update = { $inc: { balance: fromCents(balanceChangeCents) } };
+            const sets = {};
 
             if (type === 'DEPOSIT' || type === 'WITHDRAW') {
-                update.$set = { sessionProfit: 0, sessionTotalBets: 0, consecutiveWins: 0, consecutiveLosses: 0, lastBetResult: 'NONE', previousBet: 0 };
+                sets.sessionProfit = 0;
+                sets.sessionTotalBets = 0;
+                sets.consecutiveWins = 0;
+                sets.consecutiveLosses = 0;
+                sets.lastBetResult = 'NONE';
+                sets.previousBet = 0;
                 if (type === 'DEPOSIT') { update.$inc.totalDeposits = fromCents(amountCents); }
             } else {
                 update.$inc.sessionProfit = fromCents(profitChangeCents);
                 if (type === 'BET') update.$inc.sessionTotalBets = fromCents(amountCents);
-                if (game !== 'WALLET') update.$set = { lastGamePlayed: game };
+                if (game !== 'WALLET') sets.lastGamePlayed = game;
+            }
+
+            // ATOMIC START: Save Game State WITH the money deduction
+            if (initialGameState) {
+                sets.activeGame = initialGameState;
+            } else if (game !== 'WALLET' && (type === 'WIN' || type === 'REFUND')) {
+                // Game Over Clean (Sync)
+                sets['activeGame.type'] = 'NONE';
+            }
+
+            if (Object.keys(sets).length > 0) {
+                update.$set = { ...update.$set, ...sets };
             }
 
             const u = await User.findOneAndUpdate(query, update, { new: true, ...opts });
@@ -104,5 +165,6 @@ const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel,
 module.exports = {
     calculateRisk,
     processTransaction,
-    saveGameLog
+    saveGameLog,
+    GameStateManager
 };
