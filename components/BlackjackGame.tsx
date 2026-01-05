@@ -408,8 +408,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
     playSound('chip');
     
     // Optimistic Update
-    const currentBalance = user.balance;
-    updateUser({ balance: currentBalance - totalBet });
+    updateUser({ balance: user.balance - totalBet });
 
     try {
         const data: any = await DatabaseService.blackjackDeal(user.id, bet, sideBets);
@@ -477,7 +476,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         dealSequence();
         
     } catch (error: any) {
-        updateUser({ balance: currentBalance });
+        // SAFETY ROLLBACK: Force Sync instead of manual calculation
+        DatabaseService.syncUser(user.id).then(u => updateUser(u)).catch(() => {});
         setNotifyMsg(error.message || "Erro ao conectar com o servidor.");
         setIsProcessing(false);
         setStatus(GameStatus.Idle);
@@ -487,14 +487,12 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
 
   const handleInsurance = async (buy: boolean) => {
       setIsProcessing(true);
-      const currentBalance = user.balance; // Snapshot for rollback
       const cost = bet * 0.5;
 
       try {
           if (buy) {
               setInsuranceBet(cost); // Visually update total immediately
-              // OPTIMISTIC UPDATE FOR INSURANCE
-              updateUser({ balance: currentBalance - cost }); 
+              updateUser({ balance: user.balance - cost }); 
           }
 
           // Use o novo endpoint corrigido
@@ -519,10 +517,10 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
               setDecisionTimer(10);
           }
       } catch (e: any) {
-          // CRITICAL UX FIX: ROLLBACK BALANCE
+          // SAFETY ROLLBACK
           if (buy) {
               setInsuranceBet(0);
-              updateUser({ balance: currentBalance }); 
+              DatabaseService.syncUser(user.id).then(u => updateUser(u)).catch(() => {});
           }
           setNotifyMsg(e.message || "Erro no seguro.");
           setIsProcessing(false);
