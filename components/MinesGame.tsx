@@ -146,6 +146,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     return () => { isMounted.current = false; };
   }, []);
 
+  // Helper to check and dispatch trophies
+  const checkAchievements = (data: any) => {
+      if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
+          window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
+          const currentTrophies = user.unlockedTrophies || [];
+          const updatedTrophies = [...new Set([...currentTrophies, ...data.newTrophies])];
+          updateUser({ unlockedTrophies: updatedTrophies });
+      }
+  };
+
   // Restore Session
   useEffect(() => {
       if (hasRestored.current) return;
@@ -336,6 +346,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
         const result = await DatabaseService.minesReveal(user.id, index);
         if(!isMounted.current) return;
 
+        checkAchievements(result);
+
         const newGrid = [...grid];
         newGrid[index].isRevealed = true;
 
@@ -410,6 +422,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     try {
         const result = await DatabaseService.minesCashout(user.id);
         if(!isMounted.current) return;
+
+        checkAchievements(result);
 
         updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
 

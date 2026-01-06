@@ -36,8 +36,102 @@ const calculateRisk = (user, currentBet) => {
     return { level: risk, triggers };
 };
 
+// --- ACHIEVEMENT SYSTEM (NEW & SECURE) ---
+const AchievementSystem = {
+    check: async (userId, gameContext) => {
+        // gameContext: { game: 'BLACKJACK'|'MINES'|'TIGER', bet: number, payout: number, extra: object }
+        try {
+            const user = await User.findById(userId);
+            if (!user) return;
+
+            const unlockedNow = [];
+            const currentTrophies = user.unlockedTrophies || [];
+            
+            // Helper to add unique
+            const unlock = (id) => {
+                if (!currentTrophies.includes(id)) unlockedNow.push(id);
+            };
+
+            // Calculate Profit & Multiplier
+            const profit = gameContext.payout - gameContext.bet;
+            const isWin = profit > 0;
+            const multiplier = gameContext.bet > 0 ? (gameContext.payout / gameContext.bet) : 0;
+
+            // --- 1. First Win ---
+            if (isWin) unlock('first_win');
+
+            // --- 2. High Roller (Bet >= 500) ---
+            if (gameContext.bet >= 500) unlock('high_roller');
+
+            // --- 3. Sniper (Mines Specific) ---
+            if (gameContext.game === 'MINES' && gameContext.extra?.revealedCount >= 20) {
+                unlock('sniper');
+            }
+
+            // --- 4. Club 50 (50 Games Played) ---
+            if ((user.stats?.totalGames || 0) + 1 >= 50) unlock('club_50');
+            
+            // --- 5. Loyal Player (30 Games) ---
+            if ((user.stats?.totalGames || 0) + 1 >= 30) unlock('loyal_player');
+
+            // --- 6. Blackjack Master (10 Naturals) ---
+            if (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) {
+                if ((user.stats?.totalBlackjacks || 0) + 1 >= 10) unlock('bj_master');
+            }
+
+            // --- 7. Rich Club (Balance >= 5000) ---
+            if (user.balance + profit >= 5000) unlock('rich_club');
+
+            // --- NEW TROPHIES LOGIC ---
+
+            // 8. O Imbatível (10 Consecutive Wins)
+            // Note: user.consecutiveWins is updated in the controller *before* this check usually.
+            if (user.consecutiveWins >= 10) unlock('unbeatable');
+
+            // 9. Rei do Multiplicador (50x Multiplier)
+            if (multiplier >= 50) unlock('multiplier_king');
+
+            // 10. Heavy Hitter (Payout >= 200 in single game)
+            if (gameContext.payout >= 200) unlock('heavy_hitter');
+
+            // 11. A Fênix (Win after 3+ losses)
+            // Context needs to pass 'wasLossStreak' or we check local state if accessible.
+            // Since we rely on DB state, we check if PREVIOUS consecutiveLosses was >= 3.
+            // However, controller resets losses on win. We rely on the `extra` param passed from controller.
+            if (gameContext.extra?.lossStreakBroken && gameContext.extra?.previousLosses >= 3) {
+                unlock('phoenix');
+            }
+
+            // Update User Stats & Trophies Atomic
+            const update = {
+                $addToSet: { unlockedTrophies: { $each: unlockedNow } },
+                $inc: { 
+                    'stats.totalGames': 1, 
+                    'stats.totalWagered': gameContext.bet,
+                    'stats.totalWins': isWin ? 1 : 0,
+                    'stats.totalBlackjacks': (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) ? 1 : 0
+                }
+            };
+
+            if (profit > (user.stats?.highestWin || 0)) {
+                update['stats.highestWin'] = profit;
+            }
+
+            await User.updateOne({ _id: userId }, update);
+            
+            if (unlockedNow.length > 0) {
+                logEvent('METRIC', `🏆 Achievement Unlocked: ${unlockedNow.join(', ')} for ${user.username}`);
+            }
+
+            return unlockedNow;
+
+        } catch (e) {
+            console.error("Achievement Check Error:", e);
+        }
+    }
+};
+
 // --- CORE TRANSACTION ENGINE (BANKING GRADE) ---
-// Handles Money + State atomically within a Transaction
 const processTransaction = async (userId, amount, type, game = 'WALLET', referenceId = null, initialGameState = null) => {
     const amountCents = toCents(Math.abs(amount));
     const balanceChangeCents = (type === 'BET' || type === 'WITHDRAW') ? -amountCents : amountCents;
@@ -160,5 +254,6 @@ module.exports = {
     calculateRisk,
     processTransaction,
     saveGameLog,
-    GameStateHelper
+    GameStateHelper,
+    AchievementSystem
 };

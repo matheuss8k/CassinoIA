@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Mission, Trophy, StoreItem } from '../types';
+import { User, Mission, StoreItem, TROPHY_MAP } from '../types';
 import { DatabaseService } from '../services/database';
 import { User as UserIcon, Shield, Wallet, Trophy as TrophyIcon, Mail, Hash, Calendar, Star, Crown, Edit2, CheckCircle, XCircle, AlertCircle, Camera, Upload, Bot, Skull, Ghost, Sword, Zap, Glasses, Target, ShoppingBag, Coins, Gift, Lock, Unlock, FileText, Smartphone, Check, X, Clock, Sparkles } from 'lucide-react';
 import { Button } from './UI/Button';
@@ -44,16 +44,6 @@ const getPremiumAvatarIcon = (id: string) => {
     }
 };
 
-const ALL_TROPHIES: Trophy[] = [
-    { id: 'first_win', name: 'Primeira Vitória', description: 'Vença sua primeira mão de Blackjack', icon: '🏆' },
-    { id: 'high_roller', name: 'High Roller', description: 'Faça uma aposta de R$ 500+', icon: '💎' },
-    { id: 'sniper', name: 'Sniper', description: 'Acerte 20 casas no Mines', icon: '🎯' },
-    { id: 'club_50', name: 'Clube dos 50', description: 'Jogue 50 partidas', icon: '🎰' },
-    { id: 'bj_master', name: 'Mestre BJ', description: 'Consiga 10 Blackjacks naturais', icon: '♠️' },
-    { id: 'rich_club', name: 'Magnata', description: 'Alcance saldo de R$ 5.000', icon: '💰' },
-    { id: 'loyal_player', name: 'Fiel', description: 'Complete 30 missões diárias', icon: '🤝' },
-];
-
 export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) => {
   const [activeTab, setActiveTab] = useState<'profile' | 'missions' | 'trophies' | 'store'>('profile');
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
@@ -72,6 +62,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
   };
 
   const currentAvatar = getAvatarConfig(user.avatarId);
+
+  // Showcase Logic: Filter unlocked then sort by rarity (Legendary > Rare > Common)
+  const unlockedTrophiesList = TROPHY_MAP.filter(t => user.unlockedTrophies?.includes(t.id));
+  const trophyShowcase = unlockedTrophiesList.sort((a, b) => {
+      const priority = { legendary: 3, rare: 2, common: 1 };
+      return priority[b.rarity] - priority[a.rarity];
+  }).slice(0, 3); // Top 3
 
   useEffect(() => {
     const updateTimer = () => {
@@ -193,6 +190,19 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
                       <span className="bg-black/30 backdrop-blur-md px-3 py-1 rounded-lg text-xs font-mono text-slate-300 border border-white/5 whitespace-nowrap">@{user.username}</span>
                       {user.isVerified ? <span className="flex items-center gap-1 text-green-400 bg-green-900/30 px-3 py-1 rounded-lg border border-green-500/20 text-xs font-bold whitespace-nowrap"><CheckCircle size={12} /> Verificado</span> : <span className="flex items-center gap-1 text-red-400 bg-red-900/30 px-3 py-1 rounded-lg border border-red-500/20 text-xs font-bold whitespace-nowrap"><AlertCircle size={12} /> Não Verificado</span>}
                   </div>
+                  
+                  {/* HALL OF FAME SHOWCASE */}
+                  {trophyShowcase.length > 0 && (
+                      <div className="mt-4 flex items-center justify-center md:justify-start gap-2">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest mr-2">Destaques</span>
+                          {trophyShowcase.map(trophy => (
+                              <div key={trophy.id} className={`w-8 h-8 rounded-full flex items-center justify-center border text-sm relative group cursor-help ${trophy.rarity === 'legendary' ? 'bg-yellow-900/40 border-yellow-500 text-yellow-400 shadow-[0_0_10px_rgba(234,179,8,0.4)]' : trophy.rarity === 'rare' ? 'bg-blue-900/40 border-blue-500 text-blue-400' : 'bg-slate-800 border-slate-600 text-slate-400'}`} title={trophy.name}>
+                                  {trophy.icon}
+                                  {trophy.rarity === 'legendary' && <div className="absolute -top-1 -right-1 text-yellow-500 drop-shadow-md"><Crown size={10} fill="currentColor"/></div>}
+                              </div>
+                          ))}
+                      </div>
+                  )}
               </div>
               <div className="md:ml-auto shrink-0 mt-4 md:mt-0 w-full md:w-auto">
                   <div className="bg-black/30 backdrop-blur-md border border-casino-gold/30 p-3 rounded-xl flex items-center justify-center md:justify-start gap-3 w-full">
@@ -249,7 +259,26 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
             )}
             {activeTab === 'trophies' && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-fade-in">
-                    {ALL_TROPHIES.map(trophy => { const isUnlocked = user.unlockedTrophies?.includes(trophy.id); return (<div key={trophy.id} className={`p-4 rounded-2xl border text-center relative overflow-hidden group ${isUnlocked ? 'bg-gradient-to-br from-yellow-900/20 to-slate-900 border-yellow-500/30' : 'bg-slate-950 border-white/5 opacity-50 grayscale'}`}><div className="text-4xl mb-2 filter drop-shadow-lg transform group-hover:scale-110 transition-transform">{trophy.icon}</div><h4 className={`font-bold text-sm ${isUnlocked ? 'text-white' : 'text-slate-500'}`}>{trophy.name}</h4><p className="text-[10px] text-slate-400 mt-1">{trophy.description}</p>{!isUnlocked && <div className="absolute top-2 right-2 text-slate-600"><Lock size={12}/></div>}</div>) })}
+                    {TROPHY_MAP.map(trophy => { 
+                        const isUnlocked = user.unlockedTrophies?.includes(trophy.id); 
+                        const rarityBorder = { legendary: 'border-yellow-500', rare: 'border-blue-500', common: 'border-white/10' };
+                        const rarityText = { legendary: 'text-yellow-500', rare: 'text-blue-400', common: 'text-slate-500' };
+                        
+                        return (
+                            <div key={trophy.id} className={`p-4 rounded-2xl border text-center relative overflow-hidden group transition-all duration-300 ${isUnlocked ? `bg-gradient-to-br from-slate-800 to-slate-950 ${rarityBorder[trophy.rarity] || 'border-white/10'} shadow-lg hover:-translate-y-1` : 'bg-slate-950 border-white/5 opacity-50 grayscale'}`}>
+                                <div className="absolute top-2 right-2 flex flex-col items-end">
+                                    {!isUnlocked && <Lock size={12} className="text-slate-600 mb-1"/>}
+                                    {isUnlocked && trophy.rarity === 'legendary' && <Crown size={14} className="text-yellow-500 animate-pulse"/>}
+                                </div>
+                                
+                                <div className="text-4xl mb-3 filter drop-shadow-lg transform group-hover:scale-110 transition-transform duration-300">{trophy.icon}</div>
+                                
+                                <h4 className={`font-bold text-sm leading-tight mb-1 ${isUnlocked ? 'text-white' : 'text-slate-500'}`}>{trophy.name}</h4>
+                                <span className={`text-[9px] uppercase font-bold tracking-widest ${rarityText[trophy.rarity]}`}>{trophy.rarity}</span>
+                                <p className="text-[10px] text-slate-400 mt-2 leading-relaxed opacity-80">{trophy.description}</p>
+                            </div>
+                        ) 
+                    })}
                 </div>
             )}
             {activeTab === 'store' && (

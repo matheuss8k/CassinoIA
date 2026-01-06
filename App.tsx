@@ -7,6 +7,7 @@ import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
 import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users, PieChart, ShieldAlert } from 'lucide-react';
 import { Button } from './components/UI/Button';
+import { AchievementToast } from './components/UI/AchievementToast';
 
 // --- LAZY LOADING ---
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -205,7 +206,7 @@ const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, chi
     );
 };
 
-// --- WRAPPER PARA ROTAS PROTEGIDAS (DEFINIDO FORA PARA EVITAR REMOUNT) ---
+// --- WRAPPER PARA ROTAS PROTEGIDAS ---
 interface ProtectedRouteProps {
     user: User | null;
     onLogout: () => void;
@@ -341,6 +342,7 @@ const AppContent: React.FC = () => {
 
   return (
     <>
+        <AchievementToast />
         <Routes>
             <Route path="/" element={!user ? <AuthForm onLogin={handleLogin} /> : <ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><Dashboard /></ProtectedRoute>} />
             

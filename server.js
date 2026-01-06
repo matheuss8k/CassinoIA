@@ -13,7 +13,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.9.1'; // Backend Version Optimized & Audited
+const VERSION = '4.9.2'; // Backend Version Optimized & Audited
 
 // --- CACHE HTML ---
 let cachedIndexHtml = null;

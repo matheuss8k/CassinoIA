@@ -290,6 +290,17 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
       statusRef.current = status;
   }, [status]);
 
+  // Helper to check and dispatch trophies
+  const checkAchievements = (data: any) => {
+      if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
+          window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
+          // Update local user state immediately
+          const currentTrophies = user.unlockedTrophies || [];
+          const updatedTrophies = [...new Set([...currentTrophies, ...data.newTrophies])];
+          updateUser({ unlockedTrophies: updatedTrophies });
+      }
+  };
+
   // Cleanup: PUNISH ON LEAVE
   useEffect(() => {
       return () => {
@@ -420,6 +431,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         const data: any = await DatabaseService.blackjackDeal(user.id, bet, sideBets);
         if (!isMounted.current) return;
 
+        checkAchievements(data);
+
         setStatus(GameStatus.Dealing);
         setLastBet(bet);
         setResult(GameResult.None);
@@ -506,6 +519,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
           if (!isMounted.current) return;
           setIsProcessing(false);
           
+          checkAchievements(data);
+
           if (data.newBalance !== undefined) updateUser({ balance: data.newBalance });
           
           // Accumulate Insurance Win if any
@@ -544,6 +559,8 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
 
         setIsProcessing(false);
         
+        checkAchievements(data);
+
         // NOW we update state and play sound (Response First)
         setPlayerHand(data.playerHand);
         playSound('card');
@@ -571,6 +588,9 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
         if (!isMounted.current) return;
 
         setIsProcessing(false);
+        
+        checkAchievements(data);
+
         setStatus(GameStatus.DealerTurn);
         
         // Capture Dealer Bust Win

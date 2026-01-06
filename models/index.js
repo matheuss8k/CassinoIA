@@ -31,6 +31,8 @@ const userSchema = new mongoose.Schema({
   tokenVersion: { type: Number, default: 0, select: true },
   balance: { type: Number, default: 0, min: 0 },
   totalDeposits: { type: Number, default: 0 },
+  
+  // Session Stats
   sessionProfit: { type: Number, default: 0 }, 
   sessionTotalBets: { type: Number, default: 0 }, 
   consecutiveWins: { type: Number, default: 0 },
@@ -38,14 +40,28 @@ const userSchema = new mongoose.Schema({
   lastBetResult: { type: String, default: 'NONE' }, 
   previousBet: { type: Number, default: 0 }, 
   lastGamePlayed: { type: String, default: 'NONE' }, 
+  
+  // Profile
   avatarId: { type: String, default: '1' },
   isVerified: { type: Boolean, default: false },
   documentsStatus: { type: String, default: 'NONE' },
   vipLevel: { type: Number, default: 0 },
+  
+  // Gamification
   loyaltyPoints: { type: Number, default: 0 },
   missions: { type: Array, default: [] },
   unlockedTrophies: { type: [String], default: [] },
   ownedItems: { type: [String], default: [] }, 
+  
+  // NEW: Lifetime Stats for Achievements
+  stats: {
+      totalGames: { type: Number, default: 0 },
+      totalWins: { type: Number, default: 0 },
+      totalBlackjacks: { type: Number, default: 0 },
+      highestWin: { type: Number, default: 0 },
+      totalWagered: { type: Number, default: 0 }
+  },
+
   activeGame: { type: activeGameSchema, default: () => ({}) }
 }, { timestamps: true });
 
@@ -77,8 +93,6 @@ const gameLogSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // --- ACTION LOCK SCHEMA (Mutex) ---
-// BANKING UPGRADE: Increased expiry to 30s to prevent lock-slip on slow DBs.
-// The app manually releases this lock instantly, so this is just a Deadlock Failsafe.
 const actionLockSchema = new mongoose.Schema({
     _id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, 
     createdAt: { type: Date, default: Date.now, expires: 30 } 
@@ -90,3 +104,4 @@ module.exports = {
     GameLog: mongoose.model('GameLog', gameLogSchema),
     ActionLock: mongoose.model('ActionLock', actionLockSchema)
 };
+    

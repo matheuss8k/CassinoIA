@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from './UI/Button';
-import { Trophy, Gem, Crown, BrainCircuit, Search, Play, Star, ChevronRight, LayoutGrid, Zap, Heart, Flame, Cpu } from 'lucide-react';
+import { Trophy, Gem, Crown, BrainCircuit, Search, Play, Star, ChevronRight, LayoutGrid, Zap, Heart, Flame, Cpu, ArrowRight } from 'lucide-react';
 
 interface GameOption {
   id: string;
@@ -10,7 +10,7 @@ interface GameOption {
   name: string;
   provider: string; 
   description: string;
-  image: string; // Changed from icon (ReactNode) to image (URL string)
+  image: string;
   active: boolean;
   badge?: string;
   category: 'casino' | 'slots' | 'fast';
@@ -26,7 +26,7 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
       const interval = setInterval(() => {
           setBannerIndex(prev => (prev === 0 ? 1 : 0));
-      }, 5000);
+      }, 8000); // Aumentado para 8s para leitura confortável
       return () => clearInterval(interval);
   }, []);
 
@@ -121,7 +121,6 @@ export const Dashboard: React.FC = () => {
       }
   };
 
-  // Logic for sidebar lists
   const favoriteGamesList = allGames.filter(g => favorites.includes(g.id));
   const sidebarFeatured = allGames.filter(g => g.active || g.badge).slice(0, 5);
 
@@ -136,24 +135,19 @@ export const Dashboard: React.FC = () => {
                 ${game.active ? 'opacity-100' : 'opacity-60 grayscale'}
             `}
         >
-            {/* FULL COVER IMAGE */}
             <div className="absolute inset-0 bg-slate-900">
                <img 
                   src={game.image} 
                   alt={game.name}
                   className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                   onError={(e) => {
-                      // Fallback visual if image fails
                       e.currentTarget.style.display = 'none';
                       e.currentTarget.parentElement?.classList.add('bg-gradient-to-br', 'from-slate-800', 'to-slate-900');
                   }}
                />
             </div>
-            
-            {/* GRADIENT OVERLAY (Bottom to Top) - Ensures text readability */}
             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent opacity-90 transition-opacity group-hover:opacity-100"></div>
             
-            {/* BADGE (Top Left) - High Z-Index */}
             {game.badge && (
                 <div className="absolute top-2 left-2 z-40">
                     <div className="bg-white/90 backdrop-blur-sm text-black text-[9px] font-black px-2 py-0.5 rounded shadow-lg uppercase tracking-wider flex items-center gap-1">
@@ -163,7 +157,6 @@ export const Dashboard: React.FC = () => {
                 </div>
             )}
 
-            {/* FAVORITE BUTTON (Top Right) - High Z-Index */}
             <button 
                 onClick={(e) => { e.stopPropagation(); toggleFavorite(game.id); }}
                 className="absolute top-2 right-2 z-40 w-7 h-7 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-white hover:text-red-500 transition-all border border-white/10 hover:scale-110 active:scale-95 group-active:scale-95"
@@ -171,7 +164,6 @@ export const Dashboard: React.FC = () => {
                 <Heart size={12} fill={isFav ? "currentColor" : "none"} className={isFav ? "text-red-500" : ""} />
             </button>
 
-            {/* INFO AREA (Bottom) */}
             <div className="absolute bottom-0 left-0 right-0 p-4 z-20 flex flex-col justify-end">
                 <span className="text-[9px] font-bold text-yellow-400 uppercase tracking-widest mb-0.5 font-mono drop-shadow-md">
                     {game.provider}
@@ -181,7 +173,6 @@ export const Dashboard: React.FC = () => {
                 </h3>
             </div>
             
-            {/* HOVER PLAY ICON OVERLAY */}
             {game.active && (
                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 z-30">
                     <div className="w-14 h-14 rounded-full bg-yellow-500 text-black flex items-center justify-center shadow-[0_0_30px_rgba(234,179,8,0.6)] transform scale-50 group-hover:scale-100 transition-all duration-300 hover:bg-yellow-400 hover:scale-110">
@@ -218,8 +209,6 @@ export const Dashboard: React.FC = () => {
         
         {/* --- LEFT SIDEBAR (GAME LIST) --- */}
         <aside className="hidden lg:flex flex-col w-64 h-full bg-slate-950 border-r border-white/5 px-4 pt-6 pb-2 shrink-0 z-20 shadow-2xl">
-            
-            {/* Search Input */}
             <div className="relative mb-6 flex-none">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
                 <input 
@@ -231,10 +220,7 @@ export const Dashboard: React.FC = () => {
                 />
             </div>
 
-            {/* Scrollable Area */}
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-8 mb-4 pr-1">
-                
-                {/* FAVORITES */}
                 {favoriteGamesList.length > 0 && (
                     <div className="space-y-2 animate-fade-in">
                         <div className="flex items-center gap-2 px-2 mb-2 text-slate-400">
@@ -254,7 +240,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                 )}
 
-                {/* FEATURED / ALL LIST */}
                 <div className="space-y-2">
                     <div className="flex items-center gap-2 px-2 mb-2 text-slate-500">
                         <Star size={12} className="text-casino-gold" />
@@ -287,7 +272,6 @@ export const Dashboard: React.FC = () => {
                 </div>
             </div>
 
-            {/* Promo Banner Small */}
             <div className="mt-auto flex-none mb-2">
                 <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-900 relative overflow-hidden group cursor-pointer hover:shadow-lg transition-all shadow-purple-900/20">
                     <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
@@ -308,101 +292,116 @@ export const Dashboard: React.FC = () => {
         <div className="flex-1 h-full overflow-y-auto no-scrollbar px-4 py-4 animate-slide-up scroll-smooth">
             <div className="max-w-7xl mx-auto">
                 
-                {/* HERO BANNER CAROUSEL (TIGRINHO + VIP IA) */}
+                {/* 
+                   ==========================================================================
+                   HERO BANNER CAROUSEL - OTIMIZADO PARA 16:9 DA IA
+                   Ajustado para ocupar menos altura vertical e encaixar imagens corretamente.
+                   ==========================================================================
+                */}
                 {searchTerm === '' && (
-                    <div className="w-full mb-10 relative group">
+                    <div className="w-full mb-8 relative group rounded-[2rem] shadow-2xl overflow-hidden aspect-[16/9] md:aspect-[21/7] lg:aspect-[21/6] min-h-[220px] border border-white/5 bg-slate-900">
                         
                         {/* BANNER 1: TIGRINHO IA */}
-                        <div className={`transition-all duration-700 ease-in-out absolute inset-0 ${bannerIndex === 0 ? 'opacity-100 translate-x-0 z-10' : 'opacity-0 -translate-x-10 z-0 pointer-events-none'}`}>
-                            <div className="w-full rounded-[2rem] p-[1px] shadow-[0_0_60px_-15px_rgba(234,179,8,0.3)] bg-gradient-to-r from-yellow-600 via-orange-400 to-yellow-600 relative overflow-hidden">
+                        <div className={`absolute inset-0 transition-opacity duration-1000 ${bannerIndex === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
+                            {/* BACKGROUND IMAGE 
+                                object-[center_25%] garante que o foco fique no terço superior (rosto do tigre)
+                                quando o banner é cortado no desktop para ficar mais baixo.
+                            */}
+                            <img 
+                                src="/assets/banner-tiger.png" 
+                                className="absolute inset-0 w-full h-full object-cover object-[center_25%] scale-105"
+                                alt="Tiger Background"
+                                onError={(e) => {
+                                    // Fallback caso a imagem local não exista ainda
+                                    e.currentTarget.src = "https://images.unsplash.com/photo-1634152962476-4b8a00e1915c?q=80&w=2068&auto=format&fit=crop";
+                                }}
+                            />
+                            
+                            {/* GRADIENT OVERLAYS (Crucial for readability) */}
+                            {/* 1. Base Darkening */}
+                            <div className="absolute inset-0 bg-slate-950/40"></div>
+                            {/* 2. Left-to-Right Fade (Text Area) */}
+                            <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/80 to-transparent"></div>
+                            {/* 3. Bottom Fade */}
+                            <div className="absolute bottom-0 left-0 right-0 h-1/2 bg-gradient-to-t from-slate-950 to-transparent"></div>
+
+                            {/* CONTENT */}
+                            <div className="relative z-20 h-full flex flex-col justify-center px-6 md:px-12 max-w-2xl">
+                                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20 backdrop-blur-md w-fit mb-3 animate-slide-up">
+                                    <span className="relative flex h-2 w-2">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
+                                    </span>
+                                    <span className="text-[9px] font-bold text-yellow-400 uppercase tracking-widest">Live System V.3.0</span>
+                                </div>
                                 
-                                <div className="bg-slate-950 rounded-[1.9rem] relative overflow-hidden h-[240px] md:h-[280px] flex items-center justify-between px-8 md:px-12 border border-white/5">
-                                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-20"></div>
-                                    <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-yellow-500/10 rounded-full blur-[120px] -translate-y-1/2 translate-x-1/3"></div>
-                                    
-                                    <div className="relative z-20 max-w-xl flex flex-col justify-center h-full py-4">
-                                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-yellow-900/40 border border-yellow-500/30 mb-3 backdrop-blur-md shadow-[0_0_15px_rgba(234,179,8,0.1)] w-fit">
-                                            <span className="relative flex h-2 w-2">
-                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
-                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
-                                            </span>
-                                            <span className="text-[10px] font-bold text-yellow-400 uppercase tracking-widest flex items-center gap-1">IA 3.0 <span className="opacity-50">|</span> LIVE</span>
-                                        </div>
-                                        <h1 className="text-4xl md:text-5xl lg:text-6xl font-black text-white mb-3 leading-none drop-shadow-2xl italic tracking-tight">
-                                            TIGRINHO <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-500">IA</span>
-                                        </h1>
-                                        <p className="text-slate-300 text-sm md:text-base mb-6 max-w-md font-medium leading-relaxed">
-                                            Algoritmo preditivo de volatilidade em tempo real.
-                                            <span className="block mt-1 text-yellow-500 font-bold flex items-center gap-1"><Zap size={14} fill="currentColor"/> RTP 98.5% Detectado.</span>
-                                        </p>
-                                        <div className="mt-1">
-                                            <Button onClick={() => navigate('/tigrinho')} variant="primary" size="lg" className="px-8 shadow-xl shadow-yellow-900/30 hover:scale-105 transition-transform">
-                                                JOGAR AGORA <Play size={16} fill="currentColor" className="ml-2"/>
-                                            </Button>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="relative h-full w-1/3 hidden md:flex items-center justify-center z-10 pointer-events-none">
-                                        <div className="relative w-56 h-56 animate-[float_6s_ease-in-out_infinite]">
-                                            <div className="absolute inset-0 bg-gradient-to-b from-yellow-500/20 to-transparent rounded-full blur-3xl"></div>
-                                            <div className="text-[140px] absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 drop-shadow-[0_0_40px_rgba(234,179,8,0.6)] filter contrast-125 saturate-150 scale-110">🐯</div>
-                                            <div className="absolute inset-0 border border-yellow-500/30 rounded-full animate-[spin_10s_linear_infinite] border-t-transparent border-l-transparent shadow-[0_0_20px_rgba(234,179,8,0.1)]"></div>
-                                        </div>
-                                    </div>
+                                <h1 className="text-3xl md:text-5xl lg:text-6xl font-black text-white mb-3 leading-[0.9] tracking-tighter drop-shadow-2xl animate-slide-up" style={{ animationDelay: '100ms' }}>
+                                    TIGRINHO <br/>
+                                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-500">IA PREDICT</span>
+                                </h1>
+                                
+                                <p className="text-slate-300 text-xs md:text-sm mb-6 font-medium leading-relaxed max-w-md drop-shadow-md animate-slide-up hidden sm:block" style={{ animationDelay: '200ms' }}>
+                                    Algoritmo exclusivo capaz de identificar momentos de alta volatilidade e distribuir multiplicadores de até <span className="text-yellow-400 font-bold">2500x</span>.
+                                </p>
+                                
+                                <div className="flex gap-4 animate-slide-up" style={{ animationDelay: '300ms' }}>
+                                    <Button onClick={() => navigate('/tigrinho')} variant="primary" size="md" className="px-6 shadow-xl shadow-yellow-900/20 hover:scale-105 transition-transform rounded-xl">
+                                        JOGAR AGORA <Play size={14} fill="currentColor" className="ml-2"/>
+                                    </Button>
                                 </div>
                             </div>
                         </div>
 
                         {/* BANNER 2: VIP IA PREMIUM */}
-                        <div className={`transition-all duration-700 ease-in-out relative ${bannerIndex === 1 ? 'opacity-100 translate-x-0 z-10' : 'opacity-0 translate-x-10 z-0 pointer-events-none absolute inset-0'}`}>
-                             <div className="w-full rounded-[2rem] p-[1px] shadow-[0_0_60px_-15px_rgba(168,85,247,0.3)] bg-gradient-to-r from-indigo-600 via-purple-500 to-indigo-600 relative overflow-hidden">
-                                <div className="bg-slate-950 rounded-[1.9rem] relative overflow-hidden h-[240px] md:h-[280px] flex items-center justify-between px-8 md:px-12 border border-white/5">
-                                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/circuit-board.png')] opacity-10"></div>
-                                    <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[120px] translate-y-1/2 translate-x-1/4"></div>
-                                    <div className="absolute top-0 left-0 w-[300px] h-[300px] bg-cyan-500/5 rounded-full blur-[80px] -translate-y-1/2 -translate-x-1/3"></div>
+                        <div className={`absolute inset-0 transition-opacity duration-1000 ${bannerIndex === 1 ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
+                            {/* BACKGROUND IMAGE */}
+                            <img 
+                                src="/assets/banner-vip.png" 
+                                className="absolute inset-0 w-full h-full object-cover object-[center_25%] scale-105"
+                                alt="AI Background"
+                                onError={(e) => {
+                                    // Fallback caso a imagem local não exista ainda
+                                    e.currentTarget.src = "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=1965&auto=format&fit=crop";
+                                }}
+                            />
+                            
+                            {/* GRADIENT OVERLAYS */}
+                            <div className="absolute inset-0 bg-slate-950/30"></div>
+                            <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/90 to-transparent"></div>
 
-                                    <div className="relative z-20 max-w-xl flex flex-col justify-center h-full py-4">
-                                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-900/40 border border-purple-500/30 mb-3 backdrop-blur-md shadow-[0_0_15px_rgba(168,85,247,0.1)] w-fit">
-                                            <Crown size={12} className="text-purple-400 fill-purple-400 animate-pulse"/>
-                                            <span className="text-[10px] font-bold text-purple-400 uppercase tracking-widest flex items-center gap-1">MEMBRO ELITE</span>
-                                        </div>
-                                        <h1 className="text-4xl md:text-5xl lg:text-6xl font-black text-white mb-3 leading-none drop-shadow-2xl italic tracking-tight">
-                                            IA VIP <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400">4.0</span>
-                                        </h1>
-                                        <p className="text-slate-300 text-sm md:text-base mb-6 max-w-md font-medium leading-relaxed">
-                                            Acesso a algoritmos preditivos de alta precisão.
-                                            <span className="block mt-1 text-cyan-400 font-bold flex items-center gap-1"><Cpu size={14} /> Neural Engine: 99.8% Assertividade.</span>
-                                        </p>
-                                        <div className="mt-1">
-                                            <button onClick={() => navigate('/profile')} className="py-3 px-8 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm uppercase tracking-wider shadow-[0_0_30px_rgba(168,85,247,0.3)] border border-purple-400/30 transition-all active:scale-95 flex items-center gap-2 hover:scale-105">
-                                                VER PLANOS <ChevronRight size={16}/>
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div className="relative h-full w-1/3 hidden md:flex items-center justify-center z-10 pointer-events-none">
-                                         <div className="relative w-48 h-48 animate-[float_5s_ease-in-out_infinite_reverse]">
-                                             <div className="absolute inset-0 bg-cyan-500/10 blur-3xl rounded-full"></div>
-                                             <div className="w-full h-full border border-cyan-500/30 bg-slate-900/50 backdrop-blur-md rounded-2xl flex items-center justify-center transform rotate-12 relative overflow-hidden shadow-2xl">
-                                                 <div className="absolute inset-0 bg-[linear-gradient(transparent,rgba(6,182,212,0.1),transparent)] animate-scan"></div>
-                                                 <BrainCircuit size={80} className="text-cyan-400 drop-shadow-[0_0_20px_rgba(34,211,238,0.8)]" />
-                                                 <div className="absolute bottom-4 left-4 text-[10px] font-mono text-cyan-500">CPU: 99%</div>
-                                             </div>
-                                         </div>
-                                    </div>
+                            {/* CONTENT */}
+                            <div className="relative z-20 h-full flex flex-col justify-center px-6 md:px-12 max-w-2xl">
+                                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 backdrop-blur-md w-fit mb-3">
+                                    <Crown size={12} className="text-purple-400 fill-purple-400 animate-pulse"/>
+                                    <span className="text-[9px] font-bold text-purple-400 uppercase tracking-widest">Membro Elite</span>
                                 </div>
-                             </div>
+                                
+                                <h1 className="text-3xl md:text-5xl lg:text-6xl font-black text-white mb-3 leading-[0.9] tracking-tighter drop-shadow-2xl">
+                                    IA NEURAL <br/>
+                                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400">NETWORK 4.0</span>
+                                </h1>
+                                
+                                <p className="text-slate-300 text-xs md:text-sm mb-6 font-medium leading-relaxed max-w-md drop-shadow-md hidden sm:block">
+                                    Acesso privilegiado a sinais de alta precisão. Nossa rede neural processa milhões de rodadas para encontrar padrões invisíveis.
+                                </p>
+                                
+                                <div className="flex gap-4">
+                                    <button onClick={() => navigate('/profile')} className="py-2.5 px-6 rounded-xl bg-white text-black font-black text-xs uppercase tracking-wider shadow-lg hover:bg-purple-50 transition-all active:scale-95 flex items-center gap-2 hover:scale-105">
+                                        VER PLANOS <ArrowRight size={14}/>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
-                        {/* Indicators */}
-                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 z-30">
-                            <button onClick={() => setBannerIndex(0)} className={`h-1.5 rounded-full transition-all duration-300 ${bannerIndex === 0 ? 'bg-white w-8' : 'bg-white/20 w-2 hover:bg-white/40'}`}></button>
-                            <button onClick={() => setBannerIndex(1)} className={`h-1.5 rounded-full transition-all duration-300 ${bannerIndex === 1 ? 'bg-white w-8' : 'bg-white/20 w-2 hover:bg-white/40'}`}></button>
+                        {/* CAROUSEL INDICATORS */}
+                        <div className="absolute bottom-4 left-6 md:left-12 flex gap-2 z-30">
+                            <button onClick={() => setBannerIndex(0)} className={`h-1.5 rounded-full transition-all duration-500 ${bannerIndex === 0 ? 'bg-yellow-500 w-8 shadow-[0_0_10px_rgba(234,179,8,0.8)]' : 'bg-white/20 w-2 hover:bg-white/40'}`}></button>
+                            <button onClick={() => setBannerIndex(1)} className={`h-1.5 rounded-full transition-all duration-500 ${bannerIndex === 1 ? 'bg-purple-500 w-8 shadow-[0_0_10px_rgba(168,85,247,0.8)]' : 'bg-white/20 w-2 hover:bg-white/40'}`}></button>
                         </div>
                     </div>
                 )}
 
-                {/* Filters Header - STATIC POSITION (Removed sticky) */}
+                {/* Filters Header */}
                 <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between border-b border-white/5 pb-6 gap-6 relative z-30 pt-4 px-1">
                     <div className="flex items-center gap-4">
                         <div className="p-2.5 bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl border border-white/5 shadow-inner">
@@ -416,7 +415,6 @@ export const Dashboard: React.FC = () => {
                         </div>
                     </div>
                     
-                    {/* Filter Buttons */}
                     <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                             <button onClick={() => setFilter('all')} className={`px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border whitespace-nowrap shadow-sm ${filter === 'all' ? 'bg-white text-black border-white scale-105' : 'bg-slate-900 text-slate-400 border-white/5 hover:bg-slate-800 hover:text-white'}`}>Todos</button>
                             <button onClick={() => setFilter('favorites')} className={`px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border whitespace-nowrap flex items-center gap-2 shadow-sm ${filter === 'favorites' ? 'bg-red-600 text-white border-red-500 shadow-red-900/20 scale-105' : 'bg-slate-900 text-slate-400 border-white/5 hover:bg-slate-800 hover:text-white'}`}><Heart size={12} fill="currentColor"/> Favoritos</button>
@@ -426,8 +424,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Content Rendering */}
-                {/* 1. If Searching: Show Flat List */}
                 {searchTerm ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
                          {allGames.filter(g => g.name.toLowerCase().includes(searchTerm.toLowerCase())).map(renderGameCard)}
@@ -439,7 +435,6 @@ export const Dashboard: React.FC = () => {
                          )}
                     </div>
                 ) : filter !== 'all' ? (
-                    // 2. If Filtered (Tabs): Show Flat List of that category
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4 animate-fade-in">
                         {filter === 'favorites' 
                             ? (favoriteGamesList.length > 0 ? favoriteGamesList.map(renderGameCard) : <div className="col-span-full text-center py-20 text-slate-500 border-2 border-dashed border-white/5 rounded-3xl bg-slate-900/20">Você ainda não tem jogos favoritos.</div>)
@@ -447,37 +442,31 @@ export const Dashboard: React.FC = () => {
                         }
                     </div>
                 ) : (
-                    // 3. Default Lobby View: Sectioned
                     <div className="space-y-4">
-                        {/* Favorites Section (Only if > 0) */}
                         {favoriteGamesList.length > 0 && renderGameSection(
                             "Meus Favoritos", 
                             <Heart size={20} className="text-red-500 fill-red-500" />, 
                             favoriteGamesList
                         )}
 
-                        {/* Popular / Hot */}
                         {renderGameSection(
                             "Em Alta", 
                             <Flame size={20} className="text-orange-500" />, 
                             allGames.filter(g => g.badge === 'HOT' || g.badge === 'POPULAR')
                         )}
 
-                        {/* Slots */}
                         {renderGameSection(
                             "Slots & Arcade", 
                             <Gem size={20} className="text-purple-400" />, 
                             allGames.filter(g => g.category === 'slots')
                         )}
 
-                        {/* Fast Games */}
                         {renderGameSection(
                             "Jogos Rápidos", 
                             <Zap size={20} className="text-blue-400" />, 
                             allGames.filter(g => g.category === 'fast')
                         )}
 
-                        {/* Casino */}
                         {renderGameSection(
                             "Mesa & Ao Vivo", 
                             <Trophy size={20} className="text-casino-gold" />, 
@@ -487,7 +476,6 @@ export const Dashboard: React.FC = () => {
                 )}
             </div>
             
-            {/* Footer Injected Here */}
             <div className="w-full text-center py-12 text-slate-600 text-[10px] uppercase tracking-widest font-bold opacity-50 select-none border-t border-white/5 mt-12">
                 &copy; 2024 Cassino IA. Jogue com responsabilidade.
             </div>

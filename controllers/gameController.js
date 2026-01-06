@@ -1,7 +1,7 @@
 
 const crypto = require('crypto');
 const { User } = require('../models');
-const { processTransaction, saveGameLog, calculateRisk, GameStateHelper } = require('../engine');
+const { processTransaction, saveGameLog, calculateRisk, GameStateHelper, AchievementSystem } = require('../engine');
 const { secureShuffle, secureRandomInt, secureRandomFloat, generateSeed, logGameResult } = require('../utils');
 
 // --- HELPER: GET USER GAME STATE ---
@@ -51,11 +51,17 @@ const blackjackDeal = async (req, res) => {
         let status = 'PLAYING', result = 'NONE', payout = 0;
         
         if (dHand[0].rank === 'A' && pScore !== 21) status = 'INSURANCE';
-        if (pScore === 21) { status = 'GAME_OVER'; if (dScore === 21) { result = 'PUSH'; payout = amount; } else { result = 'BLACKJACK'; payout = amount * 2.5; } }
+        if (pScore === 21) { 
+            status = 'GAME_OVER'; 
+            if (dScore === 21) { result = 'PUSH'; payout = amount; } 
+            else { result = 'BLACKJACK'; payout = amount * 2.5; } 
+        }
         
         const gameState = { type: 'BLACKJACK', bet: amount, sideBets, bjDeck: deck, bjPlayerHand: pHand, bjDealerHand: dHand, bjStatus: status, riskLevel: risk.level, serverSeed };
 
         let user;
+        let newTrophies = [];
+
         // NOTE: processTransaction returns user object with attached lastTransactionId
         if (status === 'GAME_OVER') {
              user = await processTransaction(req.user.id, -totalBet, 'BET', 'BLACKJACK', null, null); 
@@ -63,12 +69,27 @@ const blackjackDeal = async (req, res) => {
              
              logGameResult('BLACKJACK', user.username, payout - totalBet, user.sessionProfit, risk.level, engineAdjustment);
              await saveGameLog(user._id, 'BLACKJACK', totalBet, payout, { pScore, dScore, result }, risk.level, engineAdjustment, user.lastTransactionId);
-             await User.updateOne({ _id: user._id }, { $set: { lastBetResult: payout > 0 ? 'WIN' : 'LOSS', previousBet: amount, activeGame: { type: 'NONE' } } });
+             
+             // Phoenix Logic Check
+             const prevLosses = userFetch.consecutiveLosses;
+             await User.updateOne({ _id: user._id }, { $set: { lastBetResult: payout > 0 ? 'WIN' : 'LOSS', previousBet: amount, activeGame: { type: 'NONE' }, consecutiveWins: payout > 0 ? (userFetch.consecutiveWins + 1) : 0, consecutiveLosses: payout > 0 ? 0 : (userFetch.consecutiveLosses + 1) } });
+             
+             // Check Achievements
+             newTrophies = await AchievementSystem.check(user._id, { 
+                 game: 'BLACKJACK', 
+                 bet: totalBet, 
+                 payout, 
+                 extra: { 
+                     isBlackjack: result === 'BLACKJACK',
+                     previousLosses: prevLosses,
+                     lossStreakBroken: payout > 0
+                 } 
+             });
         } else {
              user = await processTransaction(req.user.id, -totalBet, 'BET', 'BLACKJACK', null, gameState);
         }
         
-        res.json({ playerHand: pHand, dealerHand: status!=='GAME_OVER'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: user.balance, sideBetWin: 0, publicSeed });
+        res.json({ playerHand: pHand, dealerHand: status!=='GAME_OVER'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: user.balance, sideBetWin: 0, publicSeed, newTrophies });
     } catch(e) { res.status(400).json({ message: e.message }); }
 };
 
@@ -94,6 +115,7 @@ const blackjackHit = async (req, res) => {
         g.bjPlayerHand.push(nextCard);
         let status = 'PLAYING', result = 'NONE';
         let updatedUser = null;
+        let newTrophies = [];
         
         if (calc(g.bjPlayerHand) > 21) {
             status = 'GAME_OVER'; result = 'BUST';
@@ -101,14 +123,15 @@ const blackjackHit = async (req, res) => {
             logGameResult('BLACKJACK', req.user.username, -g.bet, 0, g.riskLevel, engineAdjustment);
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, 0, { result: 'BUST' }, g.riskLevel, engineAdjustment);
             await GameStateHelper.clear(req.user.id);
-            // On Bust, we just need current balance, no optimized save needed
+            // Check Achievements (Loss)
+            newTrophies = await AchievementSystem.check(req.user.id, { game: 'BLACKJACK', bet: g.bet, payout: 0 });
+            
             updatedUser = await User.findById(req.user.id).select('balance').lean();
         } else {
-            // OPTIMIZATION: Save State AND Return Balance in ONE query
             updatedUser = await GameStateHelper.save(req.user.id, g);
         }
         
-        res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: updatedUser.balance });
+        res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: updatedUser.balance, newTrophies });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -116,6 +139,9 @@ const blackjackStand = async (req, res) => {
     try {
         let g = await getActiveGame(req.user.id, 'BLACKJACK');
         if(!g) return res.status(400).json({message:'Inv'});
+
+        const userFetch = await User.findById(req.user.id);
+        const prevLosses = userFetch.consecutiveLosses;
 
         const calc=(h)=>{let s=0,a=0;h.forEach(c=>{if(!c.isHidden){s+=c.value;if(c.rank==='A')a++}});while(s>21&&a>0){s-=10;a--}return s};
         
@@ -150,7 +176,19 @@ const blackjackStand = async (req, res) => {
         await saveGameLog(req.user.id, 'BLACKJACK', g.bet, payout, { dScore, pScore, result }, g.riskLevel, engineAdjustment, user.lastTransactionId);
         await GameStateHelper.clear(req.user.id);
         
-        res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: user.balance });
+        // Check Achievements
+        const newTrophies = await AchievementSystem.check(user._id, { 
+            game: 'BLACKJACK', 
+            bet: g.bet, 
+            payout, 
+            extra: { 
+                isBlackjack: false,
+                previousLosses: prevLosses,
+                lossStreakBroken: payout > 0
+            } 
+        });
+        
+        res.json({ dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: user.balance, newTrophies });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -175,6 +213,7 @@ const blackjackInsurance = async (req, res) => {
         }
 
         let updatedUser = null;
+        let newTrophies = [];
 
         if (dealerHasBJ) {
             status = 'GAME_OVER';
@@ -192,13 +231,15 @@ const blackjackInsurance = async (req, res) => {
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, mainPayout + insuranceWin, { result, dealerHasBJ: true }, g.riskLevel, null);
             await GameStateHelper.clear(req.user.id);
             updatedUser = await User.findById(req.user.id).select('balance').lean();
+            
+            // Check Achievements
+            newTrophies = await AchievementSystem.check(req.user.id, { game: 'BLACKJACK', bet: g.bet, payout: mainPayout + insuranceWin });
         } else {
             g.bjStatus = status;
-            // OPTIMIZATION: Atomic Update & Return
             updatedUser = await GameStateHelper.save(req.user.id, g);
         }
 
-        res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: updatedUser.balance, insuranceWin });
+        res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: updatedUser.balance, insuranceWin, newTrophies });
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -213,7 +254,6 @@ const minesStart = async (req, res) => {
         
         const gameState = { type: 'MINES', bet: amount, minesCount, minesList: Array.from(minesSet), minesRevealed: [], minesMultiplier: 1.0, minesGameOver: false, riskLevel: risk.level, serverSeed };
         
-        // Save Game State + Deduct Balance Atomic
         const user = await processTransaction(req.user.id, -amount, 'BET', 'MINES', null, gameState);
         
         const publicSeed = crypto.createHash('sha256').update(serverSeed).digest('hex');
@@ -248,7 +288,10 @@ const minesReveal = async (req, res) => {
             logGameResult('MINES', req.user.username, -g.bet, 0, g.riskLevel, adjustmentLog);
             await saveGameLog(req.user.id, 'MINES', g.bet, 0, { outcome: 'BOMB', minesCount: g.minesCount }, g.riskLevel, adjustmentLog);
             await GameStateHelper.clear(req.user.id);
-            return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: (await User.findById(req.user.id)).balance });
+            // Check Achievements (Loss)
+            const newTrophies = await AchievementSystem.check(req.user.id, { game: 'MINES', bet: g.bet, payout: 0 });
+            
+            return res.json({ outcome: 'BOMB', mines: cM, status: 'GAME_OVER', newBalance: (await User.findById(req.user.id)).balance, newTrophies });
         }
         
         g.minesRevealed.push(tileId); 
@@ -256,7 +299,6 @@ const minesReveal = async (req, res) => {
         g.minesMultiplier = mult;
         g.minesList = cM;
         
-        // OPTIMIZATION: Single Atomic Query (Update & Return)
         const updatedUser = await GameStateHelper.save(req.user.id, g);
         
         res.json({ outcome: 'GEM', status: 'PLAYING', profit: g.bet * mult, multiplier: mult, newBalance: updatedUser.balance });
@@ -268,19 +310,38 @@ const minesCashout = async (req, res) => {
         let g = await getActiveGame(req.user.id, 'MINES');
         if(!g) return res.status(400).json({message:'Inv'});
         
+        const userFetch = await User.findById(req.user.id);
+        const prevLosses = userFetch.consecutiveLosses;
+
         const profit = parseFloat((g.bet * g.minesMultiplier).toFixed(2));
         const user = await processTransaction(req.user.id, profit, 'WIN', 'MINES');
         await User.updateOne({ _id: req.user.id }, { lastBetResult: 'WIN', previousBet: g.bet, activeGame: { type: 'NONE' }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } });
         await saveGameLog(req.user.id, 'MINES', g.bet, profit, { outcome: 'CASHOUT', multiplier: g.minesMultiplier }, g.riskLevel, null, user.lastTransactionId);
         await GameStateHelper.clear(req.user.id);
         
-        res.json({ success: true, profit, newBalance: user.balance, mines: g.minesList });
+        // Check Achievements
+        const newTrophies = await AchievementSystem.check(user._id, { 
+            game: 'MINES', 
+            bet: g.bet, 
+            payout: profit, 
+            extra: { 
+                revealedCount: g.minesRevealed.length,
+                previousLosses: prevLosses,
+                lossStreakBroken: true 
+            } 
+        });
+        
+        res.json({ success: true, profit, newBalance: user.balance, mines: g.minesList, newTrophies });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
 const tigerSpin = async (req, res) => {
     try {
         const { amount } = req.body;
+        
+        const userFetch = await User.findById(req.user.id);
+        const prevLosses = userFetch.consecutiveLosses;
+
         // Atomic Bet Deduction
         let user = await processTransaction(req.user.id, -amount, 'BET', 'TIGER');
         const risk = calculateRisk(user, amount);
@@ -291,10 +352,6 @@ const tigerSpin = async (req, res) => {
         
         if (risk.level === 'HIGH' || risk.level === 'EXTREME') { chanceBigWin = 0.0; engineAdjustment = 'RTP_ADJUST_1'; }
         
-        // 0.00 - 0.04: BIG_WIN
-        // 0.04 - 0.20: SMALL_WIN
-        // 0.20 - 0.35: TINY_WIN (New 15% range)
-        // 0.35 - 1.00: LOSS
         if (r < chanceBigWin) outcome = 'BIG_WIN'; 
         else if (r < 0.20) outcome = 'SMALL_WIN';
         else if (r < 0.35) outcome = 'TINY_WIN';
@@ -321,13 +378,25 @@ const tigerSpin = async (req, res) => {
 
         if (win > 0) { 
             user = await processTransaction(user._id, win, 'WIN', 'TIGER'); 
-            await User.updateOne({ _id: user._id }, { lastBetResult: 'WIN', activeGame: { type: 'NONE' } }); 
+            await User.updateOne({ _id: user._id }, { lastBetResult: 'WIN', activeGame: { type: 'NONE' }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } }); 
         } else {
-            await User.updateOne({ _id: user._id }, { lastBetResult: 'LOSS', activeGame: { type: 'NONE' } }); 
+            await User.updateOne({ _id: user._id }, { lastBetResult: 'LOSS', activeGame: { type: 'NONE' }, $set: { consecutiveWins: 0 }, $inc: { consecutiveLosses: 1 } }); 
         }
         
         await saveGameLog(user._id, 'TIGER', amount, win, { grid, outcome }, risk.level, engineAdjustment, user.lastTransactionId);
-        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: (await User.findById(user._id)).balance, publicSeed: crypto.randomBytes(16).toString('hex') });
+        
+        // Check Achievements
+        const newTrophies = await AchievementSystem.check(user._id, { 
+            game: 'TIGER', 
+            bet: amount, 
+            payout: win,
+            extra: {
+                previousLosses: prevLosses,
+                lossStreakBroken: win > 0
+            }
+        });
+        
+        res.json({ grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: (await User.findById(user._id)).balance, publicSeed: crypto.randomBytes(16).toString('hex'), newTrophies });
     } catch(e) { res.status(400).json({message: e.message}); }
 };
 
@@ -338,6 +407,9 @@ const forfeitGame = async (req, res) => {
         if (user.activeGame && user.activeGame.type !== 'NONE') {
             await saveGameLog(user._id, user.activeGame.type, user.activeGame.bet, 0, { result: 'FORFEIT' }, 'NORMAL', 'TIMEOUT');
             await User.updateOne({ _id: user._id }, { $set: { activeGame: { type: 'NONE' }, lastBetResult: 'LOSS' } });
+            
+            // Check Achievements (Loss via Forfeit)
+            AchievementSystem.check(user._id, { game: user.activeGame.type, bet: user.activeGame.bet, payout: 0 });
         }
         res.json({ success: true, newBalance: user.balance });
     } catch(e) { res.status(500).json({ message: e.message }); }

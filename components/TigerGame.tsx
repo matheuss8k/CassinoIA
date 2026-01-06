@@ -478,6 +478,16 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
         };
     }, []);
 
+    // Helper to check and dispatch trophies
+    const checkAchievements = (data: any) => {
+        if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
+            window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
+            const currentTrophies = user.unlockedTrophies || [];
+            const updatedTrophies = [...new Set([...currentTrophies, ...data.newTrophies])];
+            updateUser({ unlockedTrophies: updatedTrophies });
+        }
+    };
+
     // --- AUTO SPIN EFFECT LOOP ---
     useEffect(() => {
         if (!autoSpinActive) return;
@@ -586,6 +596,9 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
             stopSpinSound();
             setGrid(response.grid);
             if (response.publicSeed) setServerSeedHash(response.publicSeed);
+            
+            checkAchievements(response);
+
             updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
             playSound('stop');
             
