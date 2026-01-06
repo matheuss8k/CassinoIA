@@ -13,7 +13,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.8.4'; // Backend Version 
+const VERSION = '4.9.1'; // Backend Version Optimized & Audited
 
 // --- CACHE HTML ---
 let cachedIndexHtml = null;
@@ -29,6 +29,9 @@ app.use((req, res, next) => {
     res.locals.nonce = nonce;
     res.removeHeader('X-Powered-By'); 
     res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://www.transparenttextures.com; connect-src 'self'`);
+    // HTTP Keep-Alive Header explicit
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Keep-Alive', 'timeout=60');
     next();
 });
 
@@ -65,6 +68,13 @@ const startServer = async () => {
     const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 System (${VERSION}) Active`);
     });
+
+    // --- OPTIMIZATION: HTTP KEEP-ALIVE TUNING ---
+    // Ensure Node.js keeps connections open longer than the Load Balancer (typically 60s)
+    // allowing the browser to reuse the TCP connection for multiple bets.
+    server.keepAliveTimeout = 61000; // 61 seconds
+    server.headersTimeout = 65000; // 65 seconds
+
     server.on('error', (e) => { 
         if (e.code === 'EADDRINUSE') { process.exit(1); } else { throw e; }
     });

@@ -93,6 +93,7 @@ const blackjackHit = async (req, res) => {
 
         g.bjPlayerHand.push(nextCard);
         let status = 'PLAYING', result = 'NONE';
+        let updatedUser = null;
         
         if (calc(g.bjPlayerHand) > 21) {
             status = 'GAME_OVER'; result = 'BUST';
@@ -100,12 +101,14 @@ const blackjackHit = async (req, res) => {
             logGameResult('BLACKJACK', req.user.username, -g.bet, 0, g.riskLevel, engineAdjustment);
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, 0, { result: 'BUST' }, g.riskLevel, engineAdjustment);
             await GameStateHelper.clear(req.user.id);
+            // On Bust, we just need current balance, no optimized save needed
+            updatedUser = await User.findById(req.user.id).select('balance').lean();
         } else {
-            await GameStateHelper.save(req.user.id, g);
+            // OPTIMIZATION: Save State AND Return Balance in ONE query
+            updatedUser = await GameStateHelper.save(req.user.id, g);
         }
         
-        const balance = (await User.findById(req.user.id).select('balance')).balance;
-        res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: balance });
+        res.json({ playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: updatedUser.balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -171,6 +174,8 @@ const blackjackInsurance = async (req, res) => {
             }
         }
 
+        let updatedUser = null;
+
         if (dealerHasBJ) {
             status = 'GAME_OVER';
             dealerHand[1].isHidden = false;
@@ -186,13 +191,14 @@ const blackjackInsurance = async (req, res) => {
             }
             await saveGameLog(req.user.id, 'BLACKJACK', g.bet, mainPayout + insuranceWin, { result, dealerHasBJ: true }, g.riskLevel, null);
             await GameStateHelper.clear(req.user.id);
+            updatedUser = await User.findById(req.user.id).select('balance').lean();
         } else {
             g.bjStatus = status;
-            await GameStateHelper.save(req.user.id, g);
+            // OPTIMIZATION: Atomic Update & Return
+            updatedUser = await GameStateHelper.save(req.user.id, g);
         }
 
-        const balance = (await User.findById(req.user.id).select('balance')).balance;
-        res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: balance, insuranceWin });
+        res.json({ status, result, dealerHand: status === 'GAME_OVER' ? dealerHand : [dealerHand[0], { ...dealerHand[1], isHidden: true }], newBalance: updatedUser.balance, insuranceWin });
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -250,10 +256,10 @@ const minesReveal = async (req, res) => {
         g.minesMultiplier = mult;
         g.minesList = cM;
         
-        await GameStateHelper.save(req.user.id, g);
+        // OPTIMIZATION: Single Atomic Query (Update & Return)
+        const updatedUser = await GameStateHelper.save(req.user.id, g);
         
-        const balance = (await User.findById(req.user.id).select('balance')).balance;
-        res.json({ outcome: 'GEM', status: 'PLAYING', profit: g.bet * mult, multiplier: mult, newBalance: balance });
+        res.json({ outcome: 'GEM', status: 'PLAYING', profit: g.bet * mult, multiplier: mult, newBalance: updatedUser.balance });
     } catch(e) { res.status(500).json({message:e.message}); }
 };
 
@@ -285,10 +291,9 @@ const tigerSpin = async (req, res) => {
         
         if (risk.level === 'HIGH' || risk.level === 'EXTREME') { chanceBigWin = 0.0; engineAdjustment = 'RTP_ADJUST_1'; }
         
-        // --- UPDATED LOGIC FOR VOLATILITY SMOOTHING ---
         // 0.00 - 0.04: BIG_WIN
         // 0.04 - 0.20: SMALL_WIN
-        // 0.20 - 0.35: TINY_WIN (New 15% range taking from LOSS to return half bet)
+        // 0.20 - 0.35: TINY_WIN (New 15% range)
         // 0.35 - 1.00: LOSS
         if (r < chanceBigWin) outcome = 'BIG_WIN'; 
         else if (r < 0.20) outcome = 'SMALL_WIN';
@@ -308,8 +313,6 @@ const tigerSpin = async (req, res) => {
             grid[0]='orange'; grid[1]='orange'; grid[2]='orange'; 
             lines=[0]; 
         } else if (outcome === 'TINY_WIN') {
-            // Retention Spin: Returns 0.5x bet (Player loses half, but sees a win animation)
-            // Visually: Oranges on Middle Row (Indices 3,4,5)
             win = amount * 0.5;
             grid[3] = 'orange'; grid[4] = 'orange'; grid[5] = 'orange';
             lines = [1];

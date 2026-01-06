@@ -10,14 +10,18 @@ const connectDB = async () => {
     const uri = process.env.MONGODB_URI;
     if (!uri) throw new Error("MONGODB_URI missing");
     
-    // Banking Grade: Ensure write concern is Majority for safety
+    // Banking Grade & Performance: Connection Pooling
     await mongoose.connect(uri, { 
         dbName: 'casino_ai_db', 
         serverSelectionTimeoutMS: 5000,
-        w: 'majority', // Write Concern: Ensure data is on majority of replicas
-        retryWrites: true
+        w: 'majority', 
+        retryWrites: true,
+        // PERFORMANCE: Keep a pool of connections ready
+        maxPoolSize: 10, // Maintain up to 10 open sockets
+        minPoolSize: 2,  // Keep at least 2 sockets open/warm
+        socketTimeoutMS: 45000, // Close socket after 45s of inactivity
     });
-    console.log(`✅ MongoDB Connected (Banking Mode)`);
+    console.log(`✅ MongoDB Connected (Pool Mode)`);
   } catch (error) {
     console.error(`❌ DB Error: ${error.message}`);
     process.exit(1);
@@ -25,17 +29,13 @@ const connectDB = async () => {
 };
 
 // --- LOCK MANAGER (MONGODB BACKED) ---
-// We lazily load the model to avoid circular dependencies during init, 
-// or access it via mongoose.models
 class MongoLockManager {
     async acquire(userId) {
         try {
             const ActionLock = mongoose.model('ActionLock');
-            // Try to create a lock. If it exists, this throws code 11000
             await ActionLock.create({ _id: userId });
             return true;
         } catch (e) {
-            // Duplicate key error = Locked
             if (e.code === 11000) return false;
             console.error(`[LOCK_ERR] ${e.message}`);
             return false;

@@ -50,7 +50,7 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
         session = await mongoose.startSession();
         session.startTransaction();
 
-        const opts = { session };
+        const opts = { session, new: true, lean: true }; // OPTIMIZATION: Use lean()
         const query = { _id: userId };
         
         // Optimistic Locking for Balance
@@ -86,49 +86,44 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             update.$set = { ...update.$set, ...sets };
         }
 
-        const u = await User.findOneAndUpdate(query, update, { new: true, ...opts });
+        const u = await User.findOneAndUpdate(query, update, opts);
         
         if (!u) {
-            // Check if it was balance or user not found
             const exists = await User.exists({ _id: userId }).session(session);
             if (!exists) throw new Error('USER_NOT_FOUND');
             throw new Error('INSUFFICIENT_FUNDS');
         }
         
         // Audit Hash
-        const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 }).session(session);
+        const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 }).session(session).lean();
         const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
         
         const txData = { userId, type, amount: fromCents(amountCents), balanceAfter: u.balance, game, referenceId, timestamp: new Date().toISOString() };
         const integrityHash = generateHash({ ...txData, prevHash }); 
         
-        const [tx] = await Transaction.create([ { ...txData, integrityHash } ], opts);
+        const [tx] = await Transaction.create([ { ...txData, integrityHash } ], { session });
 
         await session.commitTransaction();
         
-        // Attach Transaction ID to return for linking
-        result = { user: u, transactionId: tx._id };
+        // Manual ID fix for lean()
+        u.id = u._id;
+        u.lastTransactionId = tx._id;
+        result = u;
 
     } catch (err) {
         if (session) await session.abortTransaction();
-        
         const isFundError = err.message === 'INSUFFICIENT_FUNDS';
         if (!isFundError) {
             logEvent('ERROR', `Tx Fail: ${err.message} | User: ${userId}`);
         }
-        
-        // Normalize error for controller
         throw new Error(isFundError ? 'Saldo insuficiente.' : 'Erro no processamento da transação.');
     } finally {
         if (session) session.endSession();
     }
 
-    // Return User + TxID (Backwards compatible return, user is accessible via result.user)
-    result.user.lastTransactionId = result.transactionId; 
-    return result.user;
+    return result;
 };
 
-// Updated to link GameLog with Transaction
 const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel, engineAdjustment, transactionId = null) => {
     try {
         await GameLog.create({ 
@@ -146,9 +141,15 @@ const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel,
     } catch(e) { console.error("DB Log Error:", e.message); }
 };
 
+// --- GAME STATE HELPER OPTIMIZED ---
 const GameStateHelper = {
+    // ATOMIC: Writes state AND returns new data in one go.
     save: async (userId, gameState) => {
-        await User.updateOne({ _id: userId }, { $set: { activeGame: gameState } });
+        return await User.findOneAndUpdate(
+            { _id: userId }, 
+            { $set: { activeGame: gameState } },
+            { new: true, lean: true, projection: 'balance activeGame' } // Return updated doc
+        );
     },
     clear: async (userId) => {
         await User.updateOne({ _id: userId }, { $set: { activeGame: { type: 'NONE' } } });
