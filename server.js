@@ -7,13 +7,14 @@ const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const { connectDB } = require('./config');
 const { mongoSanitize, compressionMiddleware, createRateLimiter } = require('./middleware');
+const { ActionLock } = require('./models'); // Import ActionLock for Cron Job
 const routes = require('./routes');
 
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.9.5'; // HTTPS Redirect Tuned
+const VERSION = '4.9.6'; // Cron Job Update
 
 // --- CACHE HTML ---
 let cachedIndexHtml = null;
@@ -87,9 +88,29 @@ app.get('*', (req, res) => {
     } else res.status(500).send("Init...");
 });
 
+// --- CRON JOBS ---
+const startCleanupJob = () => {
+    // Run every 5 minutes
+    setInterval(async () => {
+        try {
+            // Remove locks older than 60 seconds (Safety net for server crashes)
+            // MongoDB TTL handles this usually, but this is immediate recovery.
+            const threshold = new Date(Date.now() - 60000);
+            const { deletedCount } = await ActionLock.deleteMany({ createdAt: { $lt: threshold } });
+            if (deletedCount > 0) console.log(`[CRON] Cleaned ${deletedCount} stale locks.`);
+        } catch (e) {
+            console.error("[CRON] Lock cleanup failed:", e.message);
+        }
+    }, 5 * 60 * 1000); 
+};
+
 // --- START ---
 const startServer = async () => { 
     await connectDB(); 
+    
+    // Start Background Jobs
+    startCleanupJob();
+
     const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 System (${VERSION}) Active`);
     });

@@ -36,7 +36,74 @@ const calculateRisk = (user, currentBet) => {
     return { level: risk, triggers };
 };
 
-// --- ACHIEVEMENT SYSTEM (NEW & SECURE) ---
+// --- STATS BATCHER (Write-Behind Pattern) ---
+// Reduz I/O agrupando incrementos de estatísticas em memória e salvando em lote.
+class StatsBatcher {
+    constructor() {
+        this.buffer = new Map(); // userId -> { incs: {} }
+        this.FLUSH_INTERVAL = 5000; // 5 segundos
+        
+        // Inicia o loop de limpeza
+        setInterval(() => this.flush(), this.FLUSH_INTERVAL);
+    }
+
+    /**
+     * Adiciona um incremento ao buffer.
+     * Ex: add(userId, { 'stats.totalGames': 1, 'stats.totalWagered': 10 })
+     */
+    add(userId, increments) {
+        const uid = userId.toString();
+        if (!this.buffer.has(uid)) {
+            this.buffer.set(uid, { incs: {} });
+        }
+        
+        const entry = this.buffer.get(uid);
+        for (const [key, val] of Object.entries(increments)) {
+            entry.incs[key] = (entry.incs[key] || 0) + val;
+        }
+    }
+
+    /**
+     * Escreve os dados acumulados no MongoDB usando bulkWrite.
+     */
+    async flush() {
+        if (this.buffer.size === 0) return;
+
+        // Copia e limpa o buffer imediatamente para não bloquear novas escritas
+        const currentBatch = new Map(this.buffer);
+        this.buffer.clear();
+
+        const ops = [];
+        for (const [userId, data] of currentBatch.entries()) {
+            if (Object.keys(data.incs).length > 0) {
+                ops.push({
+                    updateOne: {
+                        filter: { _id: userId },
+                        update: { $inc: data.incs }
+                    }
+                });
+            }
+        }
+
+        if (ops.length > 0) {
+            try {
+                // ordered: false permite que se um falhar, os outros continuem.
+                // Alta performance para updates em massa.
+                await User.bulkWrite(ops, { ordered: false });
+                // Em dev, descomente para ver a economia:
+                // console.log(`[STATS] Flushed stats for ${ops.length} users.`);
+            } catch (e) {
+                console.error("[STATS] Batch Write Error:", e);
+                // Em caso de erro crítico, poderíamos tentar re-adicionar ao buffer,
+                // mas para stats, é melhor perder alguns contadores do que travar o sistema.
+            }
+        }
+    }
+}
+
+const statsBatcher = new StatsBatcher();
+
+// --- ACHIEVEMENT SYSTEM ---
 const AchievementSystem = {
     check: async (userId, gameContext) => {
         // gameContext: { game: 'BLACKJACK'|'MINES'|'TIGER', bet: number, payout: number, extra: object }
@@ -57,70 +124,64 @@ const AchievementSystem = {
             const isWin = profit > 0;
             const multiplier = gameContext.bet > 0 ? (gameContext.payout / gameContext.bet) : 0;
 
-            // --- 1. First Win ---
+            // --- TRADITIONAL CHECKS (Immediate logic) ---
             if (isWin) unlock('first_win');
-
-            // --- 2. High Roller (Bet >= 500) ---
             if (gameContext.bet >= 500) unlock('high_roller');
-
-            // --- 3. Sniper (Mines Specific) ---
-            if (gameContext.game === 'MINES' && gameContext.extra?.revealedCount >= 20) {
-                unlock('sniper');
-            }
-
-            // --- 4. Club 50 (50 Games Played) ---
-            if ((user.stats?.totalGames || 0) + 1 >= 50) unlock('club_50');
+            if (gameContext.game === 'MINES' && gameContext.extra?.revealedCount >= 20) unlock('sniper');
             
-            // --- 5. Loyal Player (30 Games) ---
+            // Check stats taking into account what is IN THE DB currently.
+            // Note: Batching means user.stats might be slightly behind (up to 5s).
+            // This is acceptable for "Play 50 games".
+            // We verify: (DB Value + 1 Current Game) >= Target
+            
+            if ((user.stats?.totalGames || 0) + 1 >= 50) unlock('club_50');
             if ((user.stats?.totalGames || 0) + 1 >= 30) unlock('loyal_player');
 
-            // --- 6. Blackjack Master (10 Naturals) ---
             if (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) {
                 if ((user.stats?.totalBlackjacks || 0) + 1 >= 10) unlock('bj_master');
             }
 
-            // --- 7. Rich Club (Balance >= 5000) ---
             if (user.balance + profit >= 5000) unlock('rich_club');
-
-            // --- NEW TROPHIES LOGIC ---
-
-            // 8. O Imbatível (10 Consecutive Wins)
-            // Note: user.consecutiveWins is updated in the controller *before* this check usually.
             if (user.consecutiveWins >= 10) unlock('unbeatable');
-
-            // 9. Rei do Multiplicador (50x Multiplier)
             if (multiplier >= 50) unlock('multiplier_king');
-
-            // 10. Heavy Hitter (Payout >= 200 in single game)
             if (gameContext.payout >= 200) unlock('heavy_hitter');
-
-            // 11. A Fênix (Win after 3+ losses)
-            // Context needs to pass 'wasLossStreak' or we check local state if accessible.
-            // Since we rely on DB state, we check if PREVIOUS consecutiveLosses was >= 3.
-            // However, controller resets losses on win. We rely on the `extra` param passed from controller.
             if (gameContext.extra?.lossStreakBroken && gameContext.extra?.previousLosses >= 3) {
                 unlock('phoenix');
             }
 
-            // Update User Stats & Trophies Atomic
-            const update = {
-                $addToSet: { unlockedTrophies: { $each: unlockedNow } },
-                $inc: { 
-                    'stats.totalGames': 1, 
-                    'stats.totalWagered': gameContext.bet,
-                    'stats.totalWins': isWin ? 1 : 0,
-                    'stats.totalBlackjacks': (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) ? 1 : 0
-                }
+            // --- PREPARE UPDATES ---
+            
+            // 1. Stats to Buffer (High Frequency, Low Criticality)
+            const statsIncrements = {
+                'stats.totalGames': 1,
+                'stats.totalWagered': gameContext.bet,
+                'stats.totalWins': isWin ? 1 : 0,
+                'stats.totalBlackjacks': (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) ? 1 : 0
             };
+            
+            // Adiciona ao buffer para escrita posterior
+            statsBatcher.add(userId, statsIncrements);
 
-            if (profit > (user.stats?.highestWin || 0)) {
-                update['stats.highestWin'] = profit;
+            // 2. Direct Updates (Critical UX Events like Trophies or High Score)
+            // Se ganhou troféu OU bateu recorde de maior ganho, escrevemos IMEDIATAMENTE.
+            const directUpdate = {};
+            let shouldWriteImmediately = false;
+
+            if (unlockedNow.length > 0) {
+                directUpdate.$addToSet = { unlockedTrophies: { $each: unlockedNow } };
+                shouldWriteImmediately = true;
             }
 
-            await User.updateOne({ _id: userId }, update);
-            
-            if (unlockedNow.length > 0) {
-                logEvent('METRIC', `🏆 Achievement Unlocked: ${unlockedNow.join(', ')} for ${user.username}`);
+            if (profit > (user.stats?.highestWin || 0)) {
+                directUpdate.$set = { 'stats.highestWin': profit };
+                shouldWriteImmediately = true;
+            }
+
+            if (shouldWriteImmediately) {
+                await User.updateOne({ _id: userId }, directUpdate);
+                if (unlockedNow.length > 0) {
+                    logEvent('METRIC', `🏆 Achievement Unlocked: ${unlockedNow.join(', ')} for ${user.username}`);
+                }
             }
 
             return unlockedNow;

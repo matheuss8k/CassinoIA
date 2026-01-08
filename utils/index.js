@@ -5,7 +5,11 @@ const { IS_PRODUCTION } = require('../config');
 
 // --- LOGGER ---
 const logEvent = (type, message) => {
-    if (process.env.SILENT_LOGS) return;
+    if (process.env.SILENT_LOGS === 'true' || process.env.SILENT_LOGS === '1') return;
+    
+    // SECURITY: Prevent metric/debug leaks in production unless explicitly overridden.
+    // This hides "Engine Optimization" logs from production stdout.
+    if (IS_PRODUCTION && (type === 'METRIC' || type === 'DEBUG')) return;
     
     // Async Logging: Unblock Event Loop
     setImmediate(() => {
@@ -28,7 +32,9 @@ const logGameResult = (gameName, username, resultAmount, currentSessionNet, risk
         const sign = isWin ? '+' : '';
         const msg = `GAME: ${gameName} | User: ${username} | Result: ${sign}${resultAmount.toFixed(2)} | Risk: ${riskLevel}`;
         logEvent('AUDIT', msg);
-        if (adjustmentTag) {
+        
+        // SECURITY: Never log adjustment tags in production to hide engine logic (e.g. DYNAMIC_GRID)
+        if (adjustmentTag && !IS_PRODUCTION) {
             logEvent('METRIC', `Engine Optimization: ${adjustmentTag} applied for ${username}`);
         }
     } catch (e) { console.error("Log Error:", e.message); }

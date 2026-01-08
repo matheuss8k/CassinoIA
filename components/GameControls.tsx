@@ -50,7 +50,7 @@ export const GameControls: React.FC<GameControlsProps> = ({
   // --- ESTADO: SEGURO (INSURANCE) ---
   if (status === GameStatus.Insurance) {
       return (
-        <div className="w-[340px] animate-slide-up flex flex-col gap-3 p-5 bg-slate-900 rounded-2xl border-2 border-yellow-500/50 shadow-[0_0_40px_rgba(234,179,8,0.15)] z-50 pointer-events-auto">
+        <div className="w-full max-w-[340px] animate-slide-up flex flex-col gap-3 p-5 bg-slate-900 rounded-2xl border-2 border-yellow-500/50 shadow-[0_0_40px_rgba(234,179,8,0.15)] z-50 pointer-events-auto">
             <div className="flex items-center justify-between border-b border-white/5 pb-3">
                 <div className="flex items-center gap-3">
                     <div className="p-2.5 bg-yellow-500/10 rounded-xl border border-yellow-500/20">
@@ -90,28 +90,28 @@ export const GameControls: React.FC<GameControlsProps> = ({
   // --- ESTADO: APOSTA (IDLE / BETTING) ---
   if (status === GameStatus.Idle || status === GameStatus.Betting) {
     return (
-      <div className="flex flex-col items-center gap-4 w-[360px] animate-fade-in pointer-events-auto">
+      <div className="flex flex-col items-center gap-3 w-full max-w-[360px] animate-fade-in pointer-events-auto px-2">
         
-        {/* SIDE BETS ROW - CENTRALIZAÇÃO ABSOLUTA */}
+        {/* SIDE BETS ROW */}
         {sideBets && onSideBetAction && (
           <div className="flex items-center justify-center gap-2 w-full">
             
             {/* PERFECT PAIRS CONTAINER */}
-            <div className="flex items-center gap-1">
+            <div className="flex flex-1 items-center gap-1 justify-end min-w-0">
               <button 
                 onClick={() => onSideBetAction('perfectPairs', 'toggle')}
-                className={`transition-all duration-300 flex items-center justify-center gap-2 px-3 rounded-xl border shadow-md backdrop-blur-md w-[155px] h-[48px] group active:scale-95 ${sideBets.perfectPairs > 0 ? 'bg-purple-600/90 border-purple-400 text-white shadow-purple-500/30' : 'bg-slate-900/80 border-white/5 text-slate-400 hover:bg-slate-800'}`}
+                className={`transition-all duration-300 flex items-center justify-center gap-1.5 px-2 rounded-xl border shadow-md backdrop-blur-md flex-1 h-[44px] md:h-[48px] group active:scale-95 min-w-0 ${sideBets.perfectPairs > 0 ? 'bg-purple-600/90 border-purple-400 text-white shadow-purple-500/30' : 'bg-slate-900/80 border-white/5 text-slate-400 hover:bg-slate-800'}`}
               >
-                <Heart size={16} fill={sideBets.perfectPairs > 0 ? "currentColor" : "none"} className="shrink-0" />
-                <div className="flex flex-col leading-none items-center">
-                  <span className="text-[9px] font-black uppercase tracking-wider">Par Perfeito</span>
+                <Heart size={14} fill={sideBets.perfectPairs > 0 ? "currentColor" : "none"} className="shrink-0" />
+                <div className="flex flex-col leading-none items-center min-w-0 overflow-hidden">
+                  <span className="text-[8px] md:text-[9px] font-black uppercase tracking-wider truncate w-full text-center">Par Perfeito</span>
                   {sideBets.perfectPairs > 0 && (
-                    <span className="text-[10px] font-mono font-bold mt-0.5 text-purple-200">R$ {sideBets.perfectPairs}</span>
+                    <span className="text-[9px] md:text-[10px] font-mono font-bold mt-0.5 text-purple-200">R$ {sideBets.perfectPairs}</span>
                   )}
                 </div>
               </button>
               {sideBets.perfectPairs > 0 && (
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1 shrink-0">
                   <button onClick={() => onSideBetAction('perfectPairs', 'double')} className="w-5 h-5 bg-slate-800 border border-white/10 rounded flex items-center justify-center text-[7px] font-black text-purple-300 hover:bg-purple-600 hover:text-white transition-colors">2X</button>
                   <button onClick={() => onSideBetAction('perfectPairs', 'clear')} className="w-5 h-5 bg-slate-800 border border-white/10 rounded flex items-center justify-center text-slate-500 hover:bg-red-600 hover:text-white transition-colors"><Trash2 size={10}/></button>
                 </div>
@@ -119,40 +119,40 @@ export const GameControls: React.FC<GameControlsProps> = ({
             </div>
 
             {/* DEALER BUST CONTAINER */}
-            <div className="flex items-center gap-1">
+            <div className="flex flex-1 items-center gap-1 justify-start min-w-0">
               {sideBets.dealerBust > 0 && (
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1 shrink-0">
                   <button onClick={() => onSideBetAction('dealerBust', 'double')} className="w-5 h-5 bg-slate-800 border border-white/10 rounded flex items-center justify-center text-[7px] font-black text-red-300 hover:bg-red-600 hover:text-white transition-colors">2X</button>
                   <button onClick={() => onSideBetAction('dealerBust', 'clear')} className="w-5 h-5 bg-slate-800 border border-white/10 rounded flex items-center justify-center text-slate-500 hover:bg-red-900 hover:text-white transition-colors"><Trash2 size={10}/></button>
                 </div>
               )}
               <button 
                 onClick={() => onSideBetAction('dealerBust', 'toggle')}
-                className={`transition-all duration-300 flex items-center justify-center gap-2 px-3 rounded-xl border shadow-md backdrop-blur-md w-[155px] h-[48px] group active:scale-95 ${sideBets.dealerBust > 0 ? 'bg-red-600/90 border-red-400 text-white shadow-red-500/30' : 'bg-slate-900/80 border-white/5 text-slate-400 hover:bg-slate-800'}`}
+                className={`transition-all duration-300 flex items-center justify-center gap-1.5 px-2 rounded-xl border shadow-md backdrop-blur-md flex-1 h-[44px] md:h-[48px] group active:scale-95 min-w-0 ${sideBets.dealerBust > 0 ? 'bg-red-600/90 border-red-400 text-white shadow-red-500/30' : 'bg-slate-900/80 border-white/5 text-slate-400 hover:bg-slate-800'}`}
               >
-                <div className="flex flex-col leading-none items-center">
-                  <span className="text-[9px] font-black uppercase tracking-wider">Banca Estoura</span>
+                <div className="flex flex-col leading-none items-center min-w-0 overflow-hidden">
+                  <span className="text-[8px] md:text-[9px] font-black uppercase tracking-wider truncate w-full text-center">Banca Estoura</span>
                   {sideBets.dealerBust > 0 && (
-                    <span className="text-[10px] font-mono font-bold mt-0.5 text-red-200">R$ {sideBets.dealerBust}</span>
+                    <span className="text-[9px] md:text-[10px] font-mono font-bold mt-0.5 text-red-200">R$ {sideBets.dealerBust}</span>
                   )}
                 </div>
-                <Skull size={16} className="shrink-0" />
+                <Skull size={14} className="shrink-0" />
               </button>
             </div>
           </div>
         )}
 
-        {/* CHIPS ROW - TAMANHO HARMONIZADO */}
-        <div className="flex items-center justify-center gap-2 h-10 mt-1">
+        {/* CHIPS ROW - Added py-4 to prevent clipping on hover animation */}
+        <div className="flex items-center justify-center gap-1 md:gap-2 py-4 mt-1 w-full overflow-x-auto no-scrollbar min-h-[60px]">
           {chips.map((chip) => (
             <button
               key={chip}
               disabled={balance < chip}
               onClick={() => onBet(chip)}
-              className="group transition-all duration-300 hover:-translate-y-1 active:scale-90 disabled:opacity-30 disabled:grayscale"
+              className="group transition-all duration-300 hover:-translate-y-2 active:scale-90 disabled:opacity-30 disabled:grayscale flex-shrink-0"
             >
               <div className={`
-                w-10 h-10 rounded-full border-[2.5px] border-dashed shadow-md flex items-center justify-center font-black text-[10px] relative overflow-hidden
+                w-9 h-9 md:w-10 md:h-10 rounded-full border-[2.5px] border-dashed shadow-md flex items-center justify-center font-black text-[10px] relative overflow-hidden
                 ${chip === 1 ? 'bg-blue-600 border-blue-300 text-white' : ''}
                 ${chip === 5 ? 'bg-red-600 border-red-300 text-white' : ''}
                 ${chip === 10 ? 'bg-green-600 border-green-300 text-white' : ''}
@@ -166,7 +166,7 @@ export const GameControls: React.FC<GameControlsProps> = ({
           ))}
         </div>
 
-        {/* FOOTER CONTROLS - REFINADOS E COMPACTOS */}
+        {/* FOOTER CONTROLS */}
         <div className="flex flex-col items-center gap-3 w-full">
             {/* TOTAL INDICATOR */}
             <div className="bg-black/80 backdrop-blur-md border border-white/10 px-4 py-1.5 rounded-xl flex items-center gap-3 shadow-2xl">
@@ -208,9 +208,9 @@ export const GameControls: React.FC<GameControlsProps> = ({
   // --- ESTADO: JOGANDO (PLAYING) ---
   if (status === GameStatus.Playing) {
     return (
-      <div className="w-[280px] animate-slide-up flex flex-col items-center gap-3">
+      <div className="w-full max-w-[280px] animate-slide-up flex flex-col items-center gap-3">
             <div className="flex justify-center gap-4 items-center w-full">
-                <button onClick={onStand} className="flex-1 h-14 bg-gradient-to-b from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 rounded-xl border-b-[3px] border-red-900 active:border-b-0 active:translate-y-0.5 transition-all shadow-lg flex flex-col items-center justify-center">
+                <button onClick={onStand} className="flex-1 h-14 bg-gradient-to-b from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 rounded-xl border-b-[3px] border-red-900 active:border-b-0 active:translate-y-0.5 transition-all shadow-lg flex flex-col items-center justify-center min-w-[80px]">
                     <Hand className="text-white" size={18} />
                     <span className="text-[8px] font-black text-white uppercase tracking-widest mt-1">Parar</span>
                 </button>
@@ -225,7 +225,7 @@ export const GameControls: React.FC<GameControlsProps> = ({
                     </div>
                 )}
 
-                <button onClick={onHit} className="flex-1 h-14 bg-gradient-to-b from-green-600 to-green-800 hover:from-green-500 hover:to-green-700 rounded-xl border-b-[3px] border-green-900 active:border-b-0 active:translate-y-0.5 transition-all shadow-lg flex flex-col items-center justify-center">
+                <button onClick={onHit} className="flex-1 h-14 bg-gradient-to-b from-green-600 to-green-800 hover:from-green-500 hover:to-green-700 rounded-xl border-b-[3px] border-green-900 active:border-b-0 active:translate-y-0.5 transition-all shadow-lg flex flex-col items-center justify-center min-w-[80px]">
                     <ThumbsUp className="text-white" size={18} />
                     <span className="text-[8px] font-black text-white uppercase tracking-widest mt-1">Pedir</span>
                 </button>

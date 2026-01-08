@@ -1,21 +1,18 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from '../types';
-import { DatabaseService } from '../services/database';
 import { Button } from './UI/Button';
-import { Volume2, VolumeX, Sparkles, Gem, Flame, Crown, Zap, Gift, Citrus, Coins, Info, Lock, BrainCircuit, Activity, BarChart3, ShieldCheck, Repeat, Settings2, X, History as HistoryIcon, Play, Pause, Maximize2, Calendar, AlertCircle } from 'lucide-react';
+import { Volume2, VolumeX, Sparkles, Crown, Zap, Info, BrainCircuit, Activity, BarChart3, ShieldCheck, Repeat, Settings2, X, History as HistoryIcon, Pause, Maximize2, Calendar, AlertCircle } from 'lucide-react';
 import { Notification } from './UI/Notification';
 import { ProvablyFairModal } from './UI/ProvablyFairModal';
+import { useTigerLogic, SpinHistoryItem } from '../hooks/useTigerLogic';
 
 interface TigerGameProps {
   user: User;
   updateUser: (data: Partial<User>) => void;
 }
 
-const MIN_BET = 1;
-const MAX_BET = 50;
-
-// --- UTILS: BANKING GRADE VALIDATION ---
+// --- UTILS: BANKING GRADE VALIDATION (Visual Helper) ---
 const sanitizeCurrencyInput = (value: string): string => {
     let sanitized = value.replace(/[^0-9.]/g, '');
     const parts = sanitized.split('.');
@@ -26,78 +23,6 @@ const sanitizeCurrencyInput = (value: string): string => {
         sanitized = parts[0] + '.' + parts[1].slice(0, 2);
     }
     return sanitized;
-};
-
-// --- TYPES ---
-interface SpinHistoryItem {
-    id: number;
-    amount: number;
-    win: number;
-    multiplier: number;
-    timestamp: Date;
-}
-
-// --- AUDIO SYSTEM ---
-let audioCtx: AudioContext | null = null;
-
-const playSynthSound = (type: 'spin_start' | 'stop' | 'win_small' | 'win_big' | 'multiplier'): OscillatorNode | null => {
-    try {
-        if (!audioCtx) {
-            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            audioCtx = new AudioContextClass();
-        }
-        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-
-        const ctx = audioCtx;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        const now = ctx.currentTime;
-
-        if (type === 'spin_start') {
-            // Efeito de rolamento mecânico
-            osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(100, now);
-            osc.frequency.linearRampToValueAtTime(150, now + 0.3);
-            gain.gain.setValueAtTime(0.05, now);
-            gain.gain.linearRampToValueAtTime(0.02, now + 0.3);
-            osc.start();
-            
-            const originalStop = osc.stop.bind(osc);
-            osc.stop = (time?: number) => {
-                const t = time || ctx.currentTime;
-                gain.gain.cancelScheduledValues(t);
-                gain.gain.setValueAtTime(gain.gain.value, t);
-                gain.gain.linearRampToValueAtTime(0, t + 0.05);
-                try { originalStop(t + 0.05); } catch(e) {}
-            };
-            return osc; 
-        } else if (type === 'stop') {
-            // Travamento seco (Click)
-            osc.type = 'square';
-            osc.frequency.setValueAtTime(150, now);
-            osc.frequency.exponentialRampToValueAtTime(50, now + 0.05);
-            gain.gain.setValueAtTime(0.15, now);
-            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
-            osc.start(); osc.stop(now + 0.05);
-        } else if (type === 'win_small') {
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(523.25, now);
-            osc.frequency.setValueAtTime(659.25, now + 0.1);
-            gain.gain.setValueAtTime(0.1, now);
-            gain.gain.linearRampToValueAtTime(0, now + 0.4);
-            osc.start(); osc.stop(now + 0.4);
-        } else if (type === 'multiplier') {
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(200, now);
-            osc.frequency.linearRampToValueAtTime(800, now + 0.5);
-            gain.gain.setValueAtTime(0.2, now);
-            gain.gain.linearRampToValueAtTime(0, now + 0.5);
-            osc.start(); osc.stop(now + 0.5);
-        }
-        return null;
-    } catch (e) { console.warn('Audio error'); return null; }
 };
 
 // --- 3D ANIMATED SYMBOLS ---
@@ -202,7 +127,7 @@ const SpinningReel = () => {
     );
 };
 
-// --- MEMOIZED SUB-COMPONENTS ---
+// --- VISUAL SUB-COMPONENTS ---
 
 const PaylinesOverlay = React.memo(({ winningLines, isSpinning }: { winningLines: number[], isSpinning: boolean }) => {
     if (winningLines.length === 0 || isSpinning) return null;
@@ -436,198 +361,24 @@ const MiniHistoryTicker = ({ history, onExpand }: { history: SpinHistoryItem[], 
 };
 
 
-// --- MAIN COMPONENT ---
+// --- MAIN COMPONENT (VIEW) ---
 
 export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
-    const [grid, setGrid] = useState<string[]>(Array(9).fill('orange'));
-    const [bet, setBet] = useState<number>(5);
-    const [betInputValue, setBetInputValue] = useState<string>('5.00');
-    
-    const [isSpinning, setIsSpinning] = useState<boolean>(false);
-    const [winningLines, setWinningLines] = useState<number[]>([]);
-    const [winAmount, setWinAmount] = useState<number>(0);
-    const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
-    const [isFullScreenWin, setIsFullScreenWin] = useState<boolean>(false);
-    
-    // Auto Spin State
-    const [autoSpinActive, setAutoSpinActive] = useState(false);
-    const [autoSpinCount, setAutoSpinCount] = useState(0);
-    const [autoSpinConfig, setAutoSpinConfig] = useState({ stopLoss: 0, stopWin: 0, initialBalance: 0 });
-    const [isAutoModalOpen, setIsAutoModalOpen] = useState(false);
+    // Controller Hook
+    const {
+        grid, bet, betInputValue, isSpinning, winningLines, winAmount, soundEnabled, isFullScreenWin,
+        autoSpinActive, autoSpinCount, isAutoModalOpen, history, serverSeedHash, notifyMsg,
+        MIN_BET, MAX_BET,
+        actions
+    } = useTigerLogic(user, updateUser);
 
-    // History State
-    const [history, setHistory] = useState<SpinHistoryItem[]>([]);
     const [showFullHistory, setShowFullHistory] = useState(false);
-
     const [showProvablyFair, setShowProvablyFair] = useState(false);
-    const [serverSeedHash, setServerSeedHash] = useState('');
-    
-    const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
-
-    const spinAudioRef = useRef<OscillatorNode | null>(null);
-    const isMounted = useRef(true);
-
-    useEffect(() => {
-        isMounted.current = true;
-        return () => { 
-            isMounted.current = false;
-            stopSpinSound();
-            if (audioCtx && audioCtx.state === 'running') {
-                try { audioCtx.suspend(); } catch(e) {}
-            }
-        };
-    }, []);
-
-    // Helper to check and dispatch trophies
-    const checkAchievements = (data: any) => {
-        if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
-            window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
-            const currentTrophies = user.unlockedTrophies || [];
-            const updatedTrophies = [...new Set([...currentTrophies, ...data.newTrophies])];
-            updateUser({ unlockedTrophies: updatedTrophies });
-        }
-    };
-
-    // --- AUTO SPIN EFFECT LOOP ---
-    useEffect(() => {
-        if (!autoSpinActive) return;
-        if (autoSpinCount <= 0) { stopAutoSpin(); return; }
-        if (!isSpinning) {
-             if (bet > user.balance) { setNotifyMsg("Saldo insuficiente. Auto Spin parado."); stopAutoSpin(); return; }
-             if (autoSpinConfig.stopLoss > 0 && (autoSpinConfig.initialBalance - user.balance) >= autoSpinConfig.stopLoss) { setNotifyMsg("Limite de perda atingido. Auto Spin parado."); stopAutoSpin(); return; }
-             const timer = setTimeout(() => { handleSpin(true); }, 1000); 
-             return () => clearTimeout(timer);
-        }
-    }, [autoSpinActive, isSpinning, autoSpinCount, user.balance]);
-
-    const stopAutoSpin = () => {
-        setAutoSpinActive(false);
-        setAutoSpinCount(0);
-    };
-
-    const handleStartAuto = (count: number, stopLoss: number, stopWin: number) => {
-        setIsAutoModalOpen(false);
-        if (count > 0) {
-            setAutoSpinConfig({ stopLoss, stopWin, initialBalance: user.balance });
-            setAutoSpinCount(count);
-            setAutoSpinActive(true);
-        }
-    };
-
-    const handleBetChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (isSpinning || autoSpinActive) return;
-        const raw = e.target.value;
-        if (raw === '') { setBetInputValue(''); setBet(0); return; }
-        const sanitized = sanitizeCurrencyInput(raw);
-        setBetInputValue(sanitized);
-        const parsed = parseFloat(sanitized);
-        if (!isNaN(parsed)) { setBet(parsed); }
-    };
-
-    const handleBetBlur = () => {
-        let val = parseFloat(betInputValue);
-        if (isNaN(val)) val = MIN_BET;
-        if (val < MIN_BET) val = MIN_BET;
-        if (val > MAX_BET) val = MAX_BET;
-        if (val > user.balance) val = Math.max(MIN_BET, user.balance);
-        setBet(val);
-        setBetInputValue(val.toFixed(2));
-    };
-
-    const adjustBet = (type: 'half' | 'double') => {
-        if (isSpinning || autoSpinActive) return;
-        let newVal = bet;
-        if (type === 'half') newVal = Math.max(MIN_BET, Math.floor(bet / 2));
-        if (type === 'double') newVal = Math.min(MAX_BET, bet * 2);
-        if (newVal > user.balance) newVal = Math.max(MIN_BET, user.balance);
-        setBet(newVal);
-        setBetInputValue(newVal.toFixed(2));
-    };
-
-    const playSound = (type: 'spin_start' | 'stop' | 'win_small' | 'win_big' | 'multiplier') => {
-        if (!soundEnabled) return;
-        if (type === 'spin_start') {
-            if (spinAudioRef.current) { try { spinAudioRef.current.stop(); } catch(e){} }
-            const osc = playSynthSound('spin_start');
-            spinAudioRef.current = osc;
-        } else {
-            playSynthSound(type);
-        }
-    };
-
-    const stopSpinSound = () => {
-        if (spinAudioRef.current) {
-            try { spinAudioRef.current.stop(); } catch(e){}
-            spinAudioRef.current = null;
-        }
-    };
-
-    const handleSpin = async (isAuto = false) => {
-        if (isSpinning) return;
-        if (bet < MIN_BET) return setNotifyMsg(`Aposta mínima de R$ ${MIN_BET}`);
-        if (bet > MAX_BET) return setNotifyMsg(`Aposta máxima de R$ ${MAX_BET}`);
-        if (bet > user.balance) { if (isAuto) stopAutoSpin(); return setNotifyMsg("Saldo insuficiente para jogar."); }
-
-        setIsSpinning(true);
-        setWinningLines([]);
-        setWinAmount(0);
-        setIsFullScreenWin(false);
-        playSound('spin_start');
-        
-        const currentBalance = user.balance;
-        updateUser({ balance: currentBalance - bet });
-
-        if (isAuto) { setAutoSpinCount(prev => prev - 1); }
-
-        try {
-            // Tempo de giro para efeito mecânico
-            const minSpinTime = 1200; 
-            const startTime = Date.now();
-
-            const response = await DatabaseService.tigerSpin(user.id, bet);
-            
-            const elapsedTime = Date.now() - startTime;
-            const remainingTime = Math.max(0, minSpinTime - elapsedTime);
-
-            await new Promise(r => setTimeout(r, remainingTime));
-
-            if (!isMounted.current) return;
-
-            stopSpinSound();
-            setGrid(response.grid);
-            if (response.publicSeed) setServerSeedHash(response.publicSeed);
-            
-            checkAchievements(response);
-
-            updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
-            playSound('stop');
-            
-            const newItem: SpinHistoryItem = { id: Date.now(), amount: bet, win: response.totalWin, multiplier: response.totalWin > 0 ? response.totalWin / bet : 0, timestamp: new Date() };
-            setHistory(prev => [newItem, ...prev].slice(0, 50));
-
-            if (response.totalWin > 0) {
-                if(!isMounted.current) return;
-                setWinningLines(response.winningLines);
-                setWinAmount(response.totalWin);
-                setIsFullScreenWin(response.isFullScreen);
-                if (response.isFullScreen) playSound('multiplier');
-                else playSound(response.totalWin > bet * 10 ? 'win_big' : 'win_small');
-                if (isAuto && autoSpinConfig.stopWin > 0 && response.totalWin >= autoSpinConfig.stopWin) { stopAutoSpin(); setNotifyMsg(`Limite de ganho atingido (R$ ${response.totalWin}). Auto Spin parado.`); }
-            }
-        } catch (e: any) {
-            updateUser({ balance: currentBalance });
-            stopSpinSound();
-            if (isAuto) stopAutoSpin();
-            setNotifyMsg(e.message || "Erro no giro.");
-        } finally {
-            if(isMounted.current) setIsSpinning(false);
-        }
-    };
 
     return (
         <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
-             <Notification message={notifyMsg} onClose={() => setNotifyMsg(null)} />
-             <AutoSpinModal isOpen={isAutoModalOpen} onClose={() => setIsAutoModalOpen(false)} onStartAuto={handleStartAuto} userBalance={user.balance} />
+             <Notification message={notifyMsg} onClose={() => actions.setNotifyMsg(null)} />
+             <AutoSpinModal isOpen={isAutoModalOpen} onClose={() => actions.setIsAutoModalOpen(false)} onStartAuto={actions.handleStartAuto} userBalance={user.balance} />
              <FullHistoryModal isOpen={showFullHistory} onClose={() => setShowFullHistory(false)} history={history} />
              <ProvablyFairModal isOpen={showProvablyFair} onClose={() => setShowProvablyFair(false)} serverSeedHash={serverSeedHash} clientSeed={user.id} nonce={Date.now()} />
 
@@ -670,7 +421,7 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
                         <div className="relative bg-black rounded-t-[1.5rem] p-3 flex justify-between items-center border-b border-white/5 overflow-hidden">
                             <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-20"></div>
                             <div className="flex items-center gap-2 z-10"><Sparkles size={14} className="text-yellow-400 animate-pulse" /><span className="text-[10px] font-bold text-yellow-100 uppercase tracking-wider">Multiplicador Ativo</span></div>
-                            <div className="flex items-center gap-2 z-10"><button onClick={() => setSoundEnabled(!soundEnabled)} className="text-slate-500 hover:text-white transition-colors">{soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}</button><div className="bg-yellow-500/20 border border-yellow-500/50 px-2 py-0.5 rounded text-yellow-300 text-xs font-bold shadow-[0_0_10px_rgba(234,179,8,0.2)]">2500X <span className="text-[8px] opacity-70">MAX</span></div></div>
+                            <div className="flex items-center gap-2 z-10"><button onClick={() => actions.setSoundEnabled(!soundEnabled)} className="text-slate-500 hover:text-white transition-colors">{soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}</button><div className="bg-yellow-500/20 border border-yellow-500/50 px-2 py-0.5 rounded text-yellow-300 text-xs font-bold shadow-[0_0_10px_rgba(234,179,8,0.2)]">2500X <span className="text-[8px] opacity-70">MAX</span></div></div>
                         </div>
 
                         <div className="bg-slate-950 p-3 relative h-[320px] overflow-hidden">
@@ -682,9 +433,6 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
                                     const conf = SYMBOLS[symbolId] || SYMBOLS['orange'];
                                     const isWinLine = winningLines.some(lineIdx => [[0,1,2],[3,4,5],[6,7,8],[0,4,8],[2,4,6]][lineIdx].includes(i));
                                     
-                                    // Stagger the animation based on column index
-                                    const staggerDelay = (i % 3) * 100;
-
                                     return (
                                         <div key={i} className={`relative rounded-xl border flex items-center justify-center overflow-hidden transition-all duration-300 ${conf.bg} ${conf.border} ${!isSpinning && isWinLine ? `ring-2 ring-yellow-400 ${conf.glow} scale-105 z-20 brightness-125` : ''}`}>
                                             <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent pointer-events-none"></div>
@@ -735,19 +483,19 @@ export const TigerGame: React.FC<TigerGameProps> = ({ user, updateUser }) => {
                         <div className="flex gap-3">
                             <div className="flex-none bg-slate-950 rounded-xl p-1.5 flex flex-col items-center justify-between border border-white/5 w-24">
                                 <span className="text-[8px] text-slate-500 uppercase font-bold mt-1">Aposta</span>
-                                <input type="text" inputMode="decimal" value={betInputValue} onChange={handleBetChange} onBlur={handleBetBlur} disabled={isSpinning || autoSpinActive} className="w-full bg-transparent text-center font-bold text-white text-lg my-1 outline-none border-b border-white/10 focus:border-yellow-500 transition-colors" />
+                                <input type="text" inputMode="decimal" value={betInputValue} onChange={(e) => actions.handleBetChange(e.target.value)} onBlur={actions.handleBetBlur} disabled={isSpinning || autoSpinActive} className="w-full bg-transparent text-center font-bold text-white text-lg my-1 outline-none border-b border-white/10 focus:border-yellow-500 transition-colors" />
                                 <div className="flex w-full gap-1">
-                                    <button onClick={() => adjustBet('half')} disabled={isSpinning || autoSpinActive} className="flex-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-bold text-sm h-6 disabled:opacity-50 transition-colors">½</button>
-                                    <button onClick={() => adjustBet('double')} disabled={isSpinning || autoSpinActive} className="flex-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-bold text-sm h-6 disabled:opacity-50 transition-colors">2x</button>
+                                    <button onClick={() => actions.adjustBet('half')} disabled={isSpinning || autoSpinActive} className="flex-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-bold text-sm h-6 disabled:opacity-50 transition-colors">½</button>
+                                    <button onClick={() => actions.adjustBet('double')} disabled={isSpinning || autoSpinActive} className="flex-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-bold text-sm h-6 disabled:opacity-50 transition-colors">2x</button>
                                 </div>
                             </div>
                             
-                            <button onClick={() => autoSpinActive ? stopAutoSpin() : setIsAutoModalOpen(true)} className={`w-14 rounded-xl flex flex-col items-center justify-center border border-white/5 transition-all ${autoSpinActive ? 'bg-red-900/50 border-red-500 text-red-400 animate-pulse' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'}`} disabled={isSpinning && !autoSpinActive}>
+                            <button onClick={() => autoSpinActive ? actions.stopAutoSpin() : actions.setIsAutoModalOpen(true)} className={`w-14 rounded-xl flex flex-col items-center justify-center border border-white/5 transition-all ${autoSpinActive ? 'bg-red-900/50 border-red-500 text-red-400 animate-pulse' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'}`} disabled={isSpinning && !autoSpinActive}>
                                 {autoSpinActive ? <Pause size={18} fill="currentColor"/> : <Repeat size={18} />}
                                 <span className="text-[8px] font-bold mt-1 uppercase">{autoSpinActive ? autoSpinCount : 'AUTO'}</span>
                             </button>
 
-                            <Button onClick={() => handleSpin(false)} disabled={isSpinning || autoSpinActive || bet > user.balance} className={`flex-1 h-auto text-xl rounded-xl border-b-4 border-yellow-700 active:border-b-0 active:translate-y-1 shadow-[0_0_30px_rgba(234,179,8,0.2)] ${isSpinning ? 'opacity-80 cursor-wait grayscale' : 'animate-pulse-gold'} disabled:opacity-50 disabled:grayscale`} variant="primary">
+                            <Button onClick={() => actions.handleSpin(false)} disabled={isSpinning || autoSpinActive || bet > user.balance} className={`flex-1 h-auto text-xl rounded-xl border-b-4 border-yellow-700 active:border-b-0 active:translate-y-1 shadow-[0_0_30px_rgba(234,179,8,0.2)] ${isSpinning ? 'opacity-80 cursor-wait grayscale' : 'animate-pulse-gold'} disabled:opacity-50 disabled:grayscale`} variant="primary">
                                 {isSpinning ? (<span className="flex items-center gap-2 text-sm"><Sparkles className="animate-spin" size={16}/> {autoSpinActive ? `AUTO (${autoSpinCount})` : 'GIRANDO'}</span>) : (<div className="flex flex-col items-center leading-none gap-1"><span>GIRAR</span></div>)}
                             </Button>
                         </div>
