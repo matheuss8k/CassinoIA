@@ -10,7 +10,7 @@ interface UserProfileProps {
   onUpdateUser?: (updatedUser: User) => void;
 }
 
-// Avatares Gratuitos (Padrão)
+// Avatares Gratuitos (Padrão - Mantidos no FE)
 const FREE_AVATARS = [
     { id: '1', icon: <UserIcon size={24} />, name: 'Padrão', bg: 'from-slate-700 to-slate-800' },
     { id: '2', icon: <Bot size={24} />, name: 'Cyber Bot', bg: 'from-cyan-900 to-cyan-700' },
@@ -20,18 +20,6 @@ const FREE_AVATARS = [
     { id: '6', icon: <Zap size={24} />, name: 'Speed', bg: 'from-yellow-700 to-yellow-500' },
     { id: '7', icon: <Glasses size={24} />, name: 'Dealer', bg: 'from-emerald-900 to-emerald-700' },
     { id: '8', icon: <Crown size={24} />, name: 'King', bg: 'from-pink-900 to-pink-700' },
-];
-
-const STORE_ITEMS: StoreItem[] = [
-    // Consumíveis e Cosméticos
-    { id: 'insurance', name: 'Seguro 5%', description: 'Protege 5% da próxima aposta', cost: 800, type: 'consumable', icon: 'shield' },
-    { id: 'frame_gold', name: 'Moldura Gold', description: 'Borda de ouro no perfil', cost: 2500, type: 'cosmetic', icon: 'frame' },
-    
-    // Avatares Premium
-    { id: 'avatar_rich', name: 'Mr. Monopoly', description: 'Avatar exclusivo de magnata', cost: 5000, type: 'cosmetic', icon: 'avatar_rich' },
-    { id: 'avatar_alien', name: 'Alien VIP', description: 'De outro mundo', cost: 3000, type: 'cosmetic', icon: 'avatar_alien' },
-    { id: 'avatar_robot_gold', name: 'Golden Bot', description: 'Robô banhado a ouro', cost: 8000, type: 'cosmetic', icon: 'avatar_robot_gold' },
-    { id: 'avatar_dragon', name: 'Dragon Lord', description: 'Poder supremo', cost: 10000, type: 'cosmetic', icon: 'avatar_dragon' },
 ];
 
 const getPremiumAvatarIcon = (id: string) => {
@@ -49,26 +37,53 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [timeToReset, setTimeToReset] = useState<string>('');
+  
+  // NEW: Store Items fetched from Backend
+  const [storeItems, setStoreItems] = useState<StoreItem[]>([]);
+  const [loadingStore, setLoadingStore] = useState(false);
+
+  // Fetch Store Items when tab is active or modal is open
+  useEffect(() => {
+      if (activeTab === 'store' || isAvatarModalOpen) {
+          const fetchStore = async () => {
+              if (storeItems.length > 0) return; // Cache simples
+              setLoadingStore(true);
+              try {
+                  const items = await DatabaseService.getStoreItems();
+                  setStoreItems(items);
+              } catch (e) {
+                  console.error("Failed to load store");
+              } finally {
+                  setLoadingStore(false);
+              }
+          };
+          fetchStore();
+      }
+  }, [activeTab, isAvatarModalOpen]);
 
   const getAvatarConfig = (id: string) => {
       const free = FREE_AVATARS.find(a => a.id === id);
       if (free) return free;
-      const premium = STORE_ITEMS.find(i => i.id === id);
+      
+      const premium = storeItems.find(i => i.id === id);
       if (premium) {
           const style = getPremiumAvatarIcon(premium.id);
           return { id: premium.id, icon: style.icon, name: premium.name, bg: style.bg };
       }
-      return FREE_AVATARS[0];
+      
+      // Fallback local caso a loja ainda não tenha carregado
+      const style = getPremiumAvatarIcon(id);
+      return { id, icon: style.icon, name: 'Premium', bg: style.bg };
   };
 
   const currentAvatar = getAvatarConfig(user.avatarId);
 
-  // Showcase Logic: Filter unlocked then sort by rarity
+  // Showcase Logic
   const unlockedTrophiesList = TROPHY_MAP.filter(t => user.unlockedTrophies?.includes(t.id));
   const trophyShowcase = unlockedTrophiesList.sort((a, b) => {
       const priority = { legendary: 3, rare: 2, common: 1 };
       return priority[b.rarity] - priority[a.rarity];
-  }).slice(0, 3); // Top 3
+  }).slice(0, 3);
 
   useEffect(() => {
     const updateTimer = () => {
@@ -96,7 +111,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
   const maskedCpf = formatCPFDisplay(user.cpf);
 
   const handleAvatarSelect = async (avatarId: string) => {
-      const isPremium = STORE_ITEMS.some(i => i.id === avatarId);
+      // Check Premium logic
+      const isPremium = storeItems.some(i => i.id === avatarId);
       if (isPremium && !user.ownedItems?.includes(avatarId)) {
           if(confirm("Este avatar é exclusivo! Deseja ir para a loja adquirí-lo?")) {
               setIsAvatarModalOpen(false);
@@ -159,7 +175,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
                   </div>
                   <h4 className="text-[10px] text-yellow-500 uppercase font-bold mb-2 tracking-widest flex items-center gap-1"><Star size={10}/> Premium</h4>
                   <div className="grid grid-cols-4 gap-3">
-                      {STORE_ITEMS.filter(i => i.id.startsWith('avatar_')).map((item) => {
+                      {loadingStore ? <div className="col-span-4 text-center text-xs text-slate-500">Carregando loja...</div> : 
+                        storeItems.filter(i => i.id.startsWith('avatar_')).map((item) => {
                           const style = getPremiumAvatarIcon(item.id);
                           const isOwned = user.ownedItems?.includes(item.id);
                           return (
@@ -281,8 +298,67 @@ export const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdateUser }) 
             )}
             {activeTab === 'store' && (
                 <div className="animate-fade-in space-y-6">
-                     <section><div className="flex items-center gap-2 mb-3 border-b border-white/5 pb-1"><Sparkles size={14} className="text-purple-400"/><h4 className="text-xs font-bold text-white uppercase tracking-wider">Avatares Premium</h4></div><div className="grid grid-cols-2 md:grid-cols-4 gap-3">{STORE_ITEMS.filter(i => i.id.startsWith('avatar_')).map(item => { const isOwned = user.ownedItems?.includes(item.id); const style = getPremiumAvatarIcon(item.id); return (<div key={item.id} className="bg-slate-900 border border-white/10 rounded-xl p-3 flex flex-col items-center justify-between group hover:border-purple-500/50 transition-all text-center relative overflow-hidden">{isOwned && <div className="absolute top-1 right-1 bg-green-500/20 text-green-400 p-0.5 rounded-full"><Check size={10}/></div>}<div className={`w-12 h-12 rounded-full bg-gradient-to-br ${style.bg} flex items-center justify-center text-white mb-2 shadow-lg group-hover:scale-110 transition-transform`}>{style.icon}</div><h4 className="font-bold text-white text-xs leading-tight mb-0.5">{item.name}</h4><p className="text-[9px] text-slate-400 mb-2">{item.description}</p><div className="mt-auto w-full">{isOwned ? (<button onClick={() => handleAvatarSelect(item.id)} className="w-full bg-white/5 hover:bg-white/10 text-white text-[9px] py-1.5 rounded-lg font-bold">EQUIPAR</button>) : (<button onClick={() => handlePurchase(item)} className="w-full bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-500 border border-yellow-500/30 text-[9px] py-1.5 rounded-lg font-bold flex items-center justify-center gap-1"><Coins size={8}/> {item.cost}</button>)}</div></div>) })}</div></section>
-                     <section><div className="flex items-center gap-2 mb-3 border-b border-white/5 pb-1"><ShoppingBag size={14} className="text-blue-400"/><h4 className="text-xs font-bold text-white uppercase tracking-wider">Consumíveis</h4></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{STORE_ITEMS.filter(i => !i.id.startsWith('avatar_')).map(item => { const isOwned = user.ownedItems?.includes(item.id); return (<div key={item.id} className={`bg-slate-900 border rounded-xl p-3 flex items-center justify-between group transition-all ${isOwned ? 'border-green-500/30' : 'border-white/10 hover:border-casino-gold/30'}`}><div className="flex items-center gap-3"><div className="w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center text-xl border border-white/5 relative">{item.type === 'cosmetic' ? '🎨' : '🧪'}{isOwned && <div className="absolute -top-1 -right-1 bg-green-500 text-black rounded-full p-0.5"><Check size={8} strokeWidth={4}/></div>}</div><div><h4 className={`font-bold text-xs transition-colors ${isOwned ? 'text-green-400' : 'text-white group-hover:text-casino-gold'}`}>{item.name}</h4><p className="text-[9px] text-slate-400">{item.description}</p></div></div><div className="text-right"><p className="text-sm font-bold text-yellow-500 flex items-center justify-end gap-1"><Coins size={10}/> {item.cost}</p><button onClick={() => handlePurchase(item)} disabled={isOwned && item.type === 'cosmetic'} className={`mt-1 text-[9px] px-2 py-1 rounded font-bold transition-colors ${isOwned && item.type === 'cosmetic' ? 'bg-green-500/20 text-green-400 cursor-default' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isOwned && item.type === 'cosmetic' ? 'ADQUIRIDO' : 'COMPRAR'}</button></div></div>); })}</div></section>
+                     <section>
+                        <div className="flex items-center gap-2 mb-3 border-b border-white/5 pb-1">
+                            <Sparkles size={14} className="text-purple-400"/><h4 className="text-xs font-bold text-white uppercase tracking-wider">Avatares Premium</h4>
+                        </div>
+                        {loadingStore ? <div className="text-center text-xs text-slate-500 py-4">Carregando loja...</div> : (
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                {storeItems.filter(i => i.id.startsWith('avatar_')).map(item => { 
+                                    const isOwned = user.ownedItems?.includes(item.id); 
+                                    const style = getPremiumAvatarIcon(item.id); 
+                                    return (
+                                        <div key={item.id} className="bg-slate-900 border border-white/10 rounded-xl p-3 flex flex-col items-center justify-between group hover:border-purple-500/50 transition-all text-center relative overflow-hidden">
+                                            {isOwned && <div className="absolute top-1 right-1 bg-green-500/20 text-green-400 p-0.5 rounded-full"><Check size={10}/></div>}
+                                            <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${style.bg} flex items-center justify-center text-white mb-2 shadow-lg group-hover:scale-110 transition-transform`}>{style.icon}</div>
+                                            <h4 className="font-bold text-white text-xs leading-tight mb-0.5">{item.name}</h4>
+                                            <p className="text-[9px] text-slate-400 mb-2">{item.description}</p>
+                                            <div className="mt-auto w-full">
+                                                {isOwned ? (
+                                                    <button onClick={() => handleAvatarSelect(item.id)} className="w-full bg-white/5 hover:bg-white/10 text-white text-[9px] py-1.5 rounded-lg font-bold">EQUIPAR</button>
+                                                ) : (
+                                                    <button onClick={() => handlePurchase(item)} className="w-full bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-500 border border-yellow-500/30 text-[9px] py-1.5 rounded-lg font-bold flex items-center justify-center gap-1"><Coins size={8}/> {item.cost}</button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ) 
+                                })}
+                            </div>
+                        )}
+                     </section>
+                     
+                     <section>
+                        <div className="flex items-center gap-2 mb-3 border-b border-white/5 pb-1">
+                            <ShoppingBag size={14} className="text-blue-400"/><h4 className="text-xs font-bold text-white uppercase tracking-wider">Consumíveis</h4>
+                        </div>
+                        {loadingStore ? <div className="text-center text-xs text-slate-500 py-4">Carregando consumíveis...</div> : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {storeItems.filter(i => !i.id.startsWith('avatar_')).map(item => { 
+                                    const isOwned = user.ownedItems?.includes(item.id); 
+                                    return (
+                                        <div key={item.id} className={`bg-slate-900 border rounded-xl p-3 flex items-center justify-between group transition-all ${isOwned ? 'border-green-500/30' : 'border-white/10 hover:border-casino-gold/30'}`}>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center text-xl border border-white/5 relative">
+                                                    {item.type === 'cosmetic' ? '🎨' : '🧪'}
+                                                    {isOwned && <div className="absolute -top-1 -right-1 bg-green-500 text-black rounded-full p-0.5"><Check size={8} strokeWidth={4}/></div>}
+                                                </div>
+                                                <div>
+                                                    <h4 className={`font-bold text-xs transition-colors ${isOwned ? 'text-green-400' : 'text-white group-hover:text-casino-gold'}`}>{item.name}</h4>
+                                                    <p className="text-[9px] text-slate-400">{item.description}</p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-sm font-bold text-yellow-500 flex items-center justify-end gap-1"><Coins size={10}/> {item.cost}</p>
+                                                <button onClick={() => handlePurchase(item)} disabled={isOwned && item.type === 'cosmetic'} className={`mt-1 text-[9px] px-2 py-1 rounded font-bold transition-colors ${isOwned && item.type === 'cosmetic' ? 'bg-green-500/20 text-green-400 cursor-default' : 'bg-white/10 hover:bg-white/20 text-white'}`}>
+                                                    {isOwned && item.type === 'cosmetic' ? 'ADQUIRIDO' : 'COMPRAR'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ); 
+                                })}
+                            </div>
+                        )}
+                     </section>
                 </div>
             )}
         </div>

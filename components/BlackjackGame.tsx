@@ -86,7 +86,7 @@ const MiniHistoryTicker = ({ history, onExpand }: { history: BjHistoryItem[], on
     };
 
     return (
-        <div className="w-full bg-slate-900/80 backdrop-blur-md rounded-2xl border border-white/10 p-3 flex flex-col gap-2 shrink-0 relative group min-h-[160px] xl:min-h-[160px] min-h-0">
+        <div className="w-full bg-slate-900/80 backdrop-blur-md rounded-2xl border border-white/10 p-3 flex flex-col gap-2 shrink-0 relative group min-h-[160px]">
             <div className="flex items-center justify-between pb-2 border-b border-white/5 mb-1 shrink-0">
                 <div className="flex items-center gap-2"><HistoryIcon size={14} className="text-casino-gold"/><span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Histórico</span></div>
                 <button onClick={onExpand} className="text-slate-500 hover:text-white transition-colors bg-white/5 p-1 rounded-md hover:bg-white/10" title="Ver Histórico Completo"><Maximize2 size={12} /></button>
@@ -302,7 +302,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
                 <div className="flex-1 flex flex-col items-center justify-start pt-6 md:pt-10 relative z-10 min-h-0">
                     <div className="relative mb-2">
                         <div className="absolute inset-0 flex justify-center opacity-30 pointer-events-none scale-90 md:scale-100 origin-top"><GhostSlot /><GhostSlot /></div>
-                        <div className="flex justify-center gap-1 md:gap-2 relative scale-90 md:scale-100 origin-top flex-wrap max-w-full justify-center">
+                        <div className="flex justify-center gap-1 md:gap-2 relative scale-90 md:scale-100 origin-top flex-wrap max-w-full">
                             {dealerHand.map((card, i) => (<CardComponent key={card.id} card={card} index={i} />))}
                         </div>
                     </div>
@@ -323,7 +323,7 @@ export const BlackjackGame: React.FC<BlackjackGameProps> = ({ user, updateUser }
                 <div className="flex-1 flex flex-col items-center justify-end pb-6 md:pb-10 relative z-10 min-h-0">
                     <div className="relative mb-2">
                         <div className="absolute inset-0 flex justify-center opacity-30 pointer-events-none scale-90 md:scale-100 origin-bottom"><GhostSlot /><GhostSlot /></div>
-                        <div className="flex justify-center gap-1 md:gap-2 relative scale-90 md:scale-100 origin-bottom flex-wrap max-w-full justify-center">
+                        <div className="flex justify-center gap-1 md:gap-2 relative scale-90 md:scale-100 origin-bottom flex-wrap max-w-full">
                             {playerHand.map((card, i) => (<CardComponent key={card.id} card={card} index={i} />))}
                         </div>
                     </div>

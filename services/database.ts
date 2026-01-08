@@ -1,5 +1,5 @@
 
-import { User, SideBets } from '../types';
+import { User, SideBets, StoreItem } from '../types';
 
 // --- CONFIGURAÇÃO ROBUSTA DE URL ---
 // Determina a URL base dinamicamente para evitar referências a localhost em produção.
@@ -12,7 +12,7 @@ const getApiUrl = () => {
 };
 
 const API_URL = getApiUrl();
-const CLIENT_VERSION = 'v4.9.2'; 
+const CLIENT_VERSION = 'v4.9.6'; 
 
 let _accessToken: string | null = null;
 
@@ -198,8 +198,14 @@ export const DatabaseService = {
       return handleResponse(response);
   },
 
+  // --- BACCARAT ENDPOINT ---
+  baccaratDeal: async (userId: string, bets: Record<string, number>) => {
+      const response = await fetchWithRetry(`${API_URL}/baccarat/deal`, { method: 'POST', body: JSON.stringify({ userId, bets }) });
+      return handleResponse(response);
+  },
+
   // --- FUNÇÃO PARA FORFEIT (PUNIÇÃO POR ABANDONO) ---
-  forfeitGame: async (gameType: 'BLACKJACK' | 'MINES' | 'TIGER') => {
+  forfeitGame: async (gameType: 'BLACKJACK' | 'MINES' | 'TIGER' | 'BACCARAT') => {
       const response = await fetchWithRetry(`${API_URL}/game/forfeit`, { method: 'POST', body: JSON.stringify({ game: gameType }) });
       return handleResponse(response);
   },
@@ -224,6 +230,11 @@ export const DatabaseService = {
       return handleResponse(response);
   },
   
+  getStoreItems: async (): Promise<StoreItem[]> => {
+      const response = await fetchWithRetry(`${API_URL}/store`, { method: 'GET' });
+      return handleResponse(response);
+  },
+
   purchaseItem: async (userId: string, itemId: string, cost: number) => {
       const response = await fetchWithRetry(`${API_URL}/store/purchase`, { method: 'POST', body: JSON.stringify({ userId, itemId, cost }) });
       return handleResponse(response);

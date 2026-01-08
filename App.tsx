@@ -14,6 +14,7 @@ const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ 
 const BlackjackGame = lazy(() => import('./components/BlackjackGame').then(module => ({ default: module.BlackjackGame })));
 const MinesGame = lazy(() => import('./components/MinesGame').then(module => ({ default: module.MinesGame })));
 const TigerGame = lazy(() => import('./components/TigerGame').then(module => ({ default: module.TigerGame })));
+const BaccaratGame = lazy(() => import('./components/BaccaratGame').then(module => ({ default: module.BaccaratGame })));
 const UserProfile = lazy(() => import('./components/UserProfile').then(module => ({ default: module.UserProfile })));
 
 // --- CONFIGURAÇÃO DE AVATAR (Navbar) ---
@@ -349,6 +350,7 @@ const AppContent: React.FC = () => {
             <Route path="/blackjack" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BlackjackGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             <Route path="/mines" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><MinesGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             <Route path="/tigrinho" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><TigerGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/baccarat" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BaccaratGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             
             <Route path="/profile" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><UserProfile user={user!} onUpdateUser={handleUpdateUser} /></ProtectedRoute>} />
             

@@ -31,6 +31,7 @@ router.post('/balance', authenticateToken, lockUserAction, UserController.getBal
 router.post('/user/sync', authenticateToken, UserController.syncUser);
 router.post('/user/avatar', authenticateToken, validateRequest(z.object({ avatarId: z.string() })), UserController.updateAvatar);
 router.post('/user/verify', authenticateToken, UserController.verifyUser);
+router.get('/store', authenticateToken, UserController.getStore); // Nova Rota
 router.post('/store/purchase', authenticateToken, lockUserAction, validateRequest(z.object({ itemId: z.string(), cost: z.number().int().positive() })), UserController.purchaseItem);
 
 // --- GAMES ---
@@ -41,6 +42,17 @@ router.post('/blackjack/deal', authenticateToken, lockUserAction, validateReques
 router.post('/blackjack/hit', authenticateToken, lockUserAction, GameController.blackjackHit);
 router.post('/blackjack/stand', authenticateToken, lockUserAction, GameController.blackjackStand);
 router.post('/blackjack/insurance', authenticateToken, lockUserAction, GameController.blackjackInsurance);
+
+// Baccarat (NOVO)
+router.post('/baccarat/deal', authenticateToken, lockUserAction, validateRequest(z.object({
+    bets: z.object({
+        PLAYER: z.number().min(0).optional(),
+        BANKER: z.number().min(0).optional(),
+        TIE: z.number().min(0).optional(),
+        PAIR_PLAYER: z.number().min(0).optional(),
+        PAIR_BANKER: z.number().min(0).optional()
+    })
+})), GameController.baccaratDeal);
 
 // Mines
 router.post('/mines/start', authenticateToken, lockUserAction, validateRequest(MinesStartSchema), GameController.minesStart);

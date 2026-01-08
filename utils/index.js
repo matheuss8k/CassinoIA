@@ -3,6 +3,21 @@ const crypto = require('crypto');
 const { z } = require('zod');
 const { IS_PRODUCTION } = require('../config');
 
+// --- STORE ITEMS CONFIGURATION ---
+const STORE_ITEMS = [
+    // Consumíveis
+    { id: 'insurance', name: 'Seguro 5%', description: 'Protege 5% da próxima aposta', cost: 800, type: 'consumable', icon: 'shield' },
+    
+    // Cosméticos (Molduras e Avatares)
+    { id: 'frame_gold', name: 'Moldura Gold', description: 'Borda de ouro no perfil', cost: 2500, type: 'cosmetic', icon: 'frame' },
+    
+    // Avatares Premium
+    { id: 'avatar_rich', name: 'Mr. Monopoly', description: 'Avatar exclusivo de magnata', cost: 5000, type: 'cosmetic', icon: 'avatar_rich' },
+    { id: 'avatar_alien', name: 'Alien VIP', description: 'De outro mundo', cost: 3000, type: 'cosmetic', icon: 'avatar_alien' },
+    { id: 'avatar_robot_gold', name: 'Golden Bot', description: 'Robô banhado a ouro', cost: 8000, type: 'cosmetic', icon: 'avatar_robot_gold' },
+    { id: 'avatar_dragon', name: 'Dragon Lord', description: 'Poder supremo', cost: 10000, type: 'cosmetic', icon: 'avatar_dragon' },
+];
+
 // --- LOGGER ---
 const logEvent = (type, message) => {
     if (process.env.SILENT_LOGS === 'true' || process.env.SILENT_LOGS === '1') return;
@@ -85,6 +100,7 @@ const BetSchema = z.object({ amount: z.number().positive().max(5000), sideBets: 
 const MinesStartSchema = z.object({ amount: z.number().positive().max(5000), minesCount: z.number().int().min(1).max(24) });
 
 module.exports = {
+    STORE_ITEMS,
     logEvent,
     logGameResult,
     toCents,

@@ -52,6 +52,7 @@ export const TROPHY_MAP: Trophy[] = [
     { id: 'high_roller', name: 'High Roller', description: 'Faça uma aposta única de R$ 500+.', icon: '💎', rarity: 'legendary' },
     { id: 'sniper', name: 'Sniper de Elite', description: 'Revele 20 campos no Mines sem explodir.', icon: '🎯', rarity: 'legendary' },
     { id: 'bj_master', name: 'Rei do 21', description: 'Obtenha 10 Blackjacks Naturais.', icon: '♠️', rarity: 'legendary' },
+    { id: 'bacc_king', name: 'Imperador', description: 'Ganhe 5 apostas seguidas no Banker.', icon: '🐉', rarity: 'legendary' },
 ];
 
 export interface StoreItem {
@@ -68,9 +69,21 @@ export interface SideBets {
     dealerBust: number;
 }
 
+// Baccarat Types
+export type BaccaratBetType = 'PLAYER' | 'BANKER' | 'TIE' | 'PAIR_PLAYER' | 'PAIR_BANKER';
+
+export interface BaccaratHistoryItem {
+    id: number;
+    winner: 'PLAYER' | 'BANKER' | 'TIE';
+    scorePlayer: number;
+    scoreBanker: number;
+    isPair: boolean;
+    timestamp: Date;
+}
+
 // Interface para restaurar estado do jogo
 export interface ActiveGame {
-  type: 'BLACKJACK' | 'MINES' | 'NONE';
+  type: 'BLACKJACK' | 'MINES' | 'TIGER' | 'BACCARAT' | 'NONE';
   bet: number;
   // BJ Props
   bjPlayerHand?: Card[];
@@ -133,7 +146,8 @@ export enum GameStatus {
   Playing = 'PLAYING', 
   DealerTurn = 'DEALER_TURN', 
   GameOver = 'GAME_OVER',
-  Insurance = 'INSURANCE' // New Status
+  Insurance = 'INSURANCE',
+  Squeezing = 'SQUEEZING' // New Baccarat Status
 }
 
 export enum GameResult {
@@ -142,5 +156,7 @@ export enum GameResult {
   DealerWin = 'LOSE',
   Push = 'PUSH',
   Blackjack = 'BLACKJACK',
-  Bust = 'BUST'
+  Bust = 'BUST',
+  BankerWin = 'BANKER_WIN',
+  Tie = 'TIE'
 }

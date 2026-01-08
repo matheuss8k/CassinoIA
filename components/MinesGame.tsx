@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { User, GameStatus } from '../types';
 import { Button } from './UI/Button';
@@ -143,7 +144,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     </div>
                 </div>
 
-                <div className="bg-slate-950/50 p-4 rounded-2xl border border-white/5 flex-1 flex flex-col justify-center min-h-[140px]">
+                <div className="bg-slate-950/50 p-4 rounded-2xl border border-white/5 flex-1 flex flex-col justify-center min-h-[100px]">
                     <div className="flex justify-between items-center mb-4">
                         <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">Número de Minas</span>
                         <span className="bg-red-900/30 text-red-400 text-xs px-2 py-0.5 rounded border border-red-500/30 font-bold">{mineCount}</span>
@@ -158,8 +159,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                     {status === GameStatus.Idle || status === GameStatus.GameOver ? (
                         <Button fullWidth size="lg" variant="primary" onClick={actions.startGame} disabled={isProcessing || cashoutWin !== null} className="h-14 md:h-16 text-lg md:text-xl shadow-[0_0_20px_rgba(251,191,36,0.2)] rounded-xl">{isProcessing ? 'INICIANDO...' : 'JOGAR'}</Button>
                     ) : (
-                        <div className="space-y-3">
-                             <div className="bg-slate-950/80 border border-green-500/30 p-3 rounded-xl flex items-center justify-between"><span className="text-xs text-slate-400 uppercase tracking-wider">Lucro Atual</span><span className="text-green-400 font-mono font-bold text-lg">R$ {currentWinValue.toFixed(2)}</span></div>
+                        <div className="w-full">
                              <Button fullWidth size="lg" variant="success" onClick={actions.handleCashout} disabled={isProcessing || loadingTileId !== null || revealedCount === 0} className="h-14 md:h-16 text-lg md:text-xl flex flex-col leading-none items-center justify-center gap-1 shadow-[0_0_20px_rgba(34,197,94,0.3)] animate-pulse rounded-xl disabled:opacity-50 disabled:animate-none"><span>RETIRAR</span><span className="text-xs opacity-80 font-mono tracking-wider">R$ {currentWinValue.toFixed(2)}</span></Button>
                         </div>
                     )}

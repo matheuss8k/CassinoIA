@@ -3,30 +3,56 @@ const mongoose = require('mongoose');
 const { User, Transaction, GameLog } = require('../models');
 const { toCents, fromCents, generateHash, logEvent } = require('../utils');
 
-// --- RISK ENGINE ---
+// --- RISK ENGINE (CORE LOGIC) ---
 const calculateRisk = (user, currentBet) => {
     const balance = user.balance;
     let risk = 'NORMAL';
     let triggers = [];
 
-    const betRatio = currentBet / (user.balance + currentBet);
-    if (betRatio >= 0.90) return { level: 'EXTREME', triggers: ['HIGH_EXPOSURE'] };
-
-    const baseCapital = user.totalDeposits > 0 ? user.totalDeposits : 100;
-    const currentProfit = user.sessionProfit;
-    if (currentProfit > (baseCapital * 0.15)) {
-        risk = 'EXTREME';
-        triggers.push('PROFIT_CAP');
+    // 1. All-in Trap: Aposta > 90% da banca
+    // Nota: user.balance aqui é o saldo REMANESCENTE (pós-aposta).
+    // Reconstruímos o saldo original para o cálculo correto da porcentagem.
+    const originalBalance = user.balance + currentBet;
+    const betRatio = originalBalance > 0 ? (currentBet / originalBalance) : 0;
+    
+    if (betRatio >= 0.90) {
+        return { level: 'EXTREME', triggers: ['ALL_IN_TRAP'] };
     }
 
+    // 2. Sniper: Aumento de 5x na aposta comparado a anterior
+    if (user.previousBet > 0 && currentBet >= (user.previousBet * 5)) {
+        risk = 'EXTREME';
+        triggers.push('SNIPER_PROTOCOL');
+    }
+
+    // 3. ROI Guard: Lucro > 15% do depósito total
+    const baseCapital = user.totalDeposits > 0 ? user.totalDeposits : 100; // Evita divisão por zero
+    const currentProfit = user.sessionProfit; // Lucro da sessão atual
+    // Se o saldo total for muito maior que os depósitos, também ativa
+    const totalProfitRatio = (user.balance - user.totalDeposits) / baseCapital;
+    
+    if (currentProfit > (baseCapital * 0.15) || totalProfitRatio > 0.5) {
+        risk = 'EXTREME';
+        triggers.push('ROI_GUARD');
+    }
+
+    // 4. Kill Switch: 3 vitórias seguidas
     if (user.consecutiveWins >= 3) {
         risk = 'EXTREME';
-        triggers.push('WIN_STREAK');
+        triggers.push('KILL_SWITCH_STREAK');
     }
 
-    if (user.lastBetResult === 'LOSS' && currentBet >= (user.previousBet * 1.9)) {
+    // 5. Anti-Martingale: Dobra após derrota ou vitória (comportamento padrão de alavancagem)
+    if (user.previousBet > 0 && currentBet >= (user.previousBet * 1.95) && currentBet <= (user.previousBet * 2.1)) {
+        // Se já era alto, vira extremo. Se era normal, vira high.
         risk = risk === 'EXTREME' ? 'EXTREME' : 'HIGH';
         triggers.push('MARTINGALE_DETECTED');
+    }
+
+    // Fallback: Se não caiu em nada mas o RTP do usuário está muito alto
+    if (risk === 'NORMAL' && user.stats?.totalWagered > 100 && (user.stats?.totalWins / user.stats?.totalGames) > 0.6) {
+        risk = 'HIGH';
+        triggers.push('RTP_CORRECTION');
     }
 
     if (triggers.length > 0) {
