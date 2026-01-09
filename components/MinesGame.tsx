@@ -12,6 +12,15 @@ interface MinesGameProps {
   updateUser: (data: Partial<User>) => void;
 }
 
+// --- HAPTIC HELPER ---
+const triggerHaptic = (type: 'light' | 'medium' | 'heavy') => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        if (type === 'light') navigator.vibrate(10);
+        else if (type === 'medium') navigator.vibrate(20);
+        else if (type === 'heavy') navigator.vibrate([30, 50, 30]);
+    }
+};
+
 export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
   // HOOK DE LÓGICA (Controller)
   const {
@@ -21,12 +30,27 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
       actions
   } = useMinesLogic(user, updateUser);
 
-  // Estados puramente visuais (UI Modals)
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [showProvablyFair, setShowProvablyFair] = useState<boolean>(false);
 
-  // --- FATAL ERROR MODAL ---
+  // Wrapper Actions for Haptics
+  const onTileClick = (index: number) => {
+      triggerHaptic('light'); // Slight tick on press
+      actions.handleTileClick(index);
+  };
+
+  const onStart = () => {
+      triggerHaptic('medium');
+      actions.startGame();
+  };
+
+  const onCashout = () => {
+      triggerHaptic('medium');
+      actions.handleCashout();
+  };
+
   if (fatalError) {
+      // ... (Fatal error modal code same as before) ...
       return (
           <div className="absolute inset-0 z-[999] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-fade-in">
               <div className="bg-slate-900 border border-red-500/50 rounded-2xl p-8 max-w-sm text-center shadow-2xl">
@@ -49,7 +73,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
     <div className="w-full min-h-[calc(100vh-80px)] flex flex-col items-center p-4 relative animate-fade-in pt-28 md:pt-36 pb-8 overflow-y-auto no-scrollbar">
         <Notification message={notifyMsg} onClose={() => actions.setNotifyMsg(null)} />
         
-        {/* Provably Fair Modal */}
         <ProvablyFairModal 
             isOpen={showProvablyFair} 
             onClose={() => setShowProvablyFair(false)}
@@ -81,7 +104,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             </div>
         )}
 
-        {/* --- MOBILE AI BAR (Compact - Igual Blackjack Mobile) --- */}
         <div className="xl:hidden w-full max-w-[500px] mb-4 z-30 animate-slide-up">
             <div className={`flex items-center justify-between p-2 rounded-xl border backdrop-blur-md transition-all ${isAiScanning ? 'bg-purple-900/40 border-purple-500/50' : 'bg-slate-900/80 border-white/10'}`}>
                 <div className="flex items-center gap-3 pl-2">
@@ -103,10 +125,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
             </div>
         </div>
 
-        {/* CONTAINER PRINCIPAL - AGORA COMPACTO E CENTRALIZADO VERTICALMENTE */}
         <div className="flex flex-col-reverse xl:flex-row items-center xl:items-center justify-center gap-4 xl:gap-6 w-full xl:w-auto z-10">
             
-            {/* PAINEL ESQUERDO (APOSTAS) - 240px/280px */}
+            {/* PAINEL ESQUERDO (APOSTAS) */}
             <div className="w-full max-w-[500px] xl:max-w-none xl:w-[240px] 2xl:w-[280px] bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-3xl p-5 md:p-6 flex flex-col gap-4 shadow-2xl shrink-0 transition-all duration-300">
                 <div className="flex items-center justify-between pb-2 border-b border-white/5">
                     <div className="flex items-center gap-2">
@@ -157,16 +178,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
 
                 <div className="mt-auto pt-2 border-t border-white/5">
                     {status === GameStatus.Idle || status === GameStatus.GameOver ? (
-                        <Button fullWidth size="lg" variant="primary" onClick={actions.startGame} disabled={isProcessing || cashoutWin !== null} className="h-14 md:h-16 text-lg md:text-xl shadow-[0_0_20px_rgba(251,191,36,0.2)] rounded-xl">{isProcessing ? 'INICIANDO...' : 'JOGAR'}</Button>
+                        <Button fullWidth size="lg" variant="primary" onClick={onStart} disabled={isProcessing || cashoutWin !== null} className="h-14 md:h-16 text-lg md:text-xl shadow-[0_0_20px_rgba(251,191,36,0.2)] rounded-xl">{isProcessing ? 'INICIANDO...' : 'JOGAR'}</Button>
                     ) : (
                         <div className="w-full">
-                             <Button fullWidth size="lg" variant="success" onClick={actions.handleCashout} disabled={isProcessing || loadingTileId !== null || revealedCount === 0} className="h-14 md:h-16 text-lg md:text-xl flex flex-col leading-none items-center justify-center gap-1 shadow-[0_0_20px_rgba(34,197,94,0.3)] animate-pulse rounded-xl disabled:opacity-50 disabled:animate-none"><span>RETIRAR</span><span className="text-xs opacity-80 font-mono tracking-wider">R$ {currentWinValue.toFixed(2)}</span></Button>
+                             <Button fullWidth size="lg" variant="success" onClick={onCashout} disabled={isProcessing || loadingTileId !== null || revealedCount === 0} className="h-14 md:h-16 text-lg md:text-xl flex flex-col leading-none items-center justify-center gap-1 shadow-[0_0_20px_rgba(34,197,94,0.3)] animate-pulse rounded-xl disabled:opacity-50 disabled:animate-none"><span>RETIRAR</span><span className="text-xs opacity-80 font-mono tracking-wider">R$ {currentWinValue.toFixed(2)}</span></Button>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* CENTRO (GRID DO JOGO) - SEM flex-1 e SEM mx-auto no desktop */}
+            {/* CENTRO (GRID DO JOGO) */}
             <div className="w-full max-w-[500px] md:max-w-[550px] aspect-square flex flex-col relative bg-slate-900/50 rounded-3xl border border-white/10 p-4 overflow-hidden backdrop-blur-sm shadow-[0_0_50px_rgba(0,0,0,0.5)] shrink-0 mx-auto xl:mx-0">
                 <div className="grid grid-cols-3 items-center mb-4 px-2 bg-slate-950/50 p-2 rounded-xl border border-white/5 shrink-0">
                      <div className="flex items-center gap-3 justify-self-start">
@@ -186,7 +207,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                             const isLocked = status !== GameStatus.Playing || tile.isRevealed || isProcessing || loadingTileId !== null;
                             const isLoading = loadingTileId === tile.id;
                             return (
-                                <button key={tile.id} disabled={isLocked} onClick={() => actions.handleTileClick(index)} className={`relative w-full h-full rounded-xl transition-all duration-300 transform perspective-1000 group ${tile.isRevealed ? 'bg-slate-800 border-slate-700 cursor-default shadow-inner' : isSuggested ? 'bg-purple-900/40 border-2 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.5)] z-10 scale-105 animate-pulse' : 'bg-gradient-to-br from-slate-700 to-slate-800 border-b-[4px] border-slate-950 hover:-translate-y-1 hover:brightness-110 cursor-pointer shadow-lg active:border-b-0 active:translate-y-0.5'} ${!isLocked && !tile.isRevealed && !isSuggested ? 'hover:shadow-[0_0_10px_rgba(255,255,255,0.05)]' : ''} ${status === GameStatus.GameOver && tile.content === 'mine' && !tile.isRevealed ? 'opacity-50 grayscale' : ''} ${isLoading ? 'scale-90 opacity-80 ring-2 ring-white/20' : ''} ${isLocked && !tile.isRevealed && !isLoading ? 'cursor-not-allowed opacity-90' : ''}`}>
+                                <button key={tile.id} disabled={isLocked} onClick={() => onTileClick(index)} className={`relative w-full h-full rounded-xl transition-all duration-300 transform perspective-1000 group ${tile.isRevealed ? 'bg-slate-800 border-slate-700 cursor-default shadow-inner' : isSuggested ? 'bg-purple-900/40 border-2 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.5)] z-10 scale-105 animate-pulse' : 'bg-gradient-to-br from-slate-700 to-slate-800 border-b-[4px] border-slate-950 hover:-translate-y-1 hover:brightness-110 cursor-pointer shadow-lg active:border-b-0 active:translate-y-0.5'} ${!isLocked && !tile.isRevealed && !isSuggested ? 'hover:shadow-[0_0_10px_rgba(255,255,255,0.05)]' : ''} ${status === GameStatus.GameOver && tile.content === 'mine' && !tile.isRevealed ? 'opacity-50 grayscale' : ''} ${isLoading ? 'scale-90 opacity-80 ring-2 ring-white/20' : ''} ${isLocked && !tile.isRevealed && !isLoading ? 'cursor-not-allowed opacity-90' : ''}`}>
                                     {isSuggested && !tile.isRevealed && !isLoading && (<div className="absolute inset-0 flex items-center justify-center animate-bounce"><div className="bg-purple-500/20 p-1.5 rounded-full border border-purple-500/50 backdrop-blur-sm"><Scan size={20} className="text-purple-300" /></div></div>)}
                                     {isLoading && (
                                         <div className="absolute inset-0 flex items-center justify-center">
@@ -206,6 +227,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                         })}
                     </div>
                 </div>
+                {/* Win/Loss Popups unchanged */}
                 {cashoutWin !== null && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center animate-fade-in backdrop-blur-sm bg-black/40 rounded-[2rem]">
                          <div className="relative pointer-events-none">
@@ -232,7 +254,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({ user, updateUser }) => {
                 )}
             </div>
 
-            {/* PAINEL DIREITO (IA) - 240px/280px */}
+            {/* PAINEL DIREITO (IA) */}
             <div className="hidden xl:flex w-[240px] 2xl:w-[280px] flex-col gap-4 justify-center shrink-0 transition-all duration-300">
                  <div className="w-full animate-slide-up h-full flex flex-col">
                     <div className="bg-slate-900/90 border border-purple-500/30 rounded-3xl p-6 backdrop-blur-xl shadow-[0_0_30px_rgba(168,85,247,0.1)] relative overflow-hidden group flex-1 flex flex-col min-h-[500px]">

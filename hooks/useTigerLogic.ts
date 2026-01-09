@@ -175,10 +175,10 @@ export const useTigerLogic = (user: User, updateUser: (data: Partial<User>) => v
         if (!isSpinning) {
              if (bet > user.balance) { setNotifyMsg("Saldo insuficiente. Auto Spin parado."); stopAutoSpin(); return; }
              if (autoSpinConfig.stopLoss > 0 && (autoSpinConfig.initialBalance - user.balance) >= autoSpinConfig.stopLoss) { setNotifyMsg("Limite de perda atingido. Auto Spin parado."); stopAutoSpin(); return; }
-             const timer = setTimeout(() => { handleSpin(true); }, 1000); 
+             const timer = setTimeout(() => { handleSpin(true); }, 800); // Faster auto spin loop
              return () => clearTimeout(timer);
         }
-    }, [autoSpinActive, isSpinning, autoSpinCount, user.balance]); // bet removed from dependency to avoid loop if bet changes (it shouldn't)
+    }, [autoSpinActive, isSpinning, autoSpinCount, user.balance]); 
 
     // --- ACTIONS ---
     const stopAutoSpin = useCallback(() => {
@@ -242,8 +242,8 @@ export const useTigerLogic = (user: User, updateUser: (data: Partial<User>) => v
         if (isAuto) { setAutoSpinCount(prev => prev - 1); }
 
         try {
-            // Tempo de giro para efeito mecânico
-            const minSpinTime = 1200; 
+            // Tempo de giro reduzido para 700ms para sensação mais ágil
+            const minSpinTime = 700; 
             const startTime = Date.now();
 
             const response: any = await DatabaseService.tigerSpin(user.id, bet);

@@ -168,8 +168,14 @@ export const DatabaseService = {
       await fetchWithRetry(`${API_URL}/balance`, { method: 'POST', body: JSON.stringify({ userId, newBalance }) });
   },
 
-  updateAvatar: async (userId: string, avatarId: string) => {
-      const response = await fetchWithRetry(`${API_URL}/user/avatar`, { method: 'POST', body: JSON.stringify({ userId, avatarId }) });
+  toggleFavorite: async (userId: string, gameId: string) => {
+      const response = await fetchWithRetry(`${API_URL}/user/favorite`, { method: 'POST', body: JSON.stringify({ userId, gameId }) });
+      return handleResponse(response);
+  },
+
+  // UPDATED: Now generic updateAvatar => updateEquip
+  updateAvatar: async (userId: string, itemId: string, type: 'avatar' | 'frame') => {
+      const response = await fetchWithRetry(`${API_URL}/user/equip`, { method: 'POST', body: JSON.stringify({ userId, itemId, type }) });
       return handleResponse(response);
   },
 
@@ -231,7 +237,8 @@ export const DatabaseService = {
   },
   
   getStoreItems: async (): Promise<StoreItem[]> => {
-      const response = await fetchWithRetry(`${API_URL}/store`, { method: 'GET' });
+      // CACHE BUSTING: Adicionado ?t=timestamp para forçar busca nova
+      const response = await fetchWithRetry(`${API_URL}/store?t=${Date.now()}`, { method: 'GET' });
       return handleResponse(response);
   },
 

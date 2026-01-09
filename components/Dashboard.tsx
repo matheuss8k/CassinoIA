@@ -2,7 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from './UI/Button';
-import { Trophy, Gem, Crown, BrainCircuit, Search, Play, Star, ChevronRight, LayoutGrid, Zap, Heart, Flame, Cpu, ArrowRight } from 'lucide-react';
+import { Trophy, Gem, Crown, BrainCircuit, Search, Play, Star, ChevronRight, LayoutGrid, Zap, Heart, Flame, ArrowRight } from 'lucide-react';
+import { User } from '../types';
+import { DatabaseService } from '../services/database';
 
 interface GameOption {
   id: string;
@@ -16,7 +18,12 @@ interface GameOption {
   category: 'casino' | 'slots' | 'fast';
 }
 
-export const Dashboard: React.FC = () => {
+interface DashboardProps {
+    user: User;
+    updateUser: (u: User) => void;
+}
+
+export const Dashboard: React.FC<DashboardProps> = ({ user, updateUser }) => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'casino' | 'slots' | 'fast' | 'favorites'>('all');
@@ -30,22 +37,24 @@ export const Dashboard: React.FC = () => {
       return () => clearInterval(interval);
   }, []);
 
-  // Favorites State (Persisted)
-  const [favorites, setFavorites] = useState<string[]>(() => {
-      try {
-          const saved = localStorage.getItem('casino_favorites');
-          return saved ? JSON.parse(saved) : [];
-      } catch { return []; }
-  });
+  // Use user.favorites directly from the persistent user object
+  const favorites = user.favorites || [];
 
-  const toggleFavorite = (gameId: string) => {
-      setFavorites(prev => {
-          const newFavs = prev.includes(gameId) 
-              ? prev.filter(id => id !== gameId) 
-              : [...prev, gameId];
-          localStorage.setItem('casino_favorites', JSON.stringify(newFavs));
-          return newFavs;
-      });
+  const toggleFavorite = async (gameId: string) => {
+      // Optimistic UI Update
+      const isAlreadyFav = favorites.includes(gameId);
+      const newFavs = isAlreadyFav ? favorites.filter(id => id !== gameId) : [...favorites, gameId];
+      
+      updateUser({ ...user, favorites: newFavs });
+
+      try {
+          // Backend Sync
+          await DatabaseService.toggleFavorite(user.id, gameId);
+      } catch (error) {
+          // Revert on error
+          console.error("Failed to toggle favorite", error);
+          updateUser({ ...user, favorites: favorites }); // Revert to original
+      }
   };
 
   const allGames: GameOption[] = [
@@ -194,7 +203,6 @@ export const Dashboard: React.FC = () => {
                <h3 className="text-base lg:text-lg font-bold text-white uppercase tracking-tight">{title}</h3>
           </div>
           {games.length > 0 ? (
-              // GRID AJUSTADO: lg:grid-cols-4 (notebooks) em vez de 5 para aumentar o tamanho dos cards
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3 md:gap-4 lg:gap-6">
                   {games.map(renderGameCard)}
               </div>
@@ -227,7 +235,6 @@ export const Dashboard: React.FC = () => {
                     <div className="space-y-1.5 animate-fade-in">
                         <div className="flex items-center gap-2 px-2 mb-1.5 text-slate-400">
                             <Heart size={14} className="text-red-500 fill-red-500" />
-                            {/* AUMENTO FONTE */}
                             <span className="text-xs lg:text-sm font-bold uppercase tracking-widest">Favoritos</span>
                         </div>
                         {favoriteGamesList.map(game => (
@@ -237,7 +244,6 @@ export const Dashboard: React.FC = () => {
                                 className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-slate-900 border border-transparent hover:border-white/5 transition-all group text-left"
                             >
                                 <img src={game.image} alt="" className="w-8 h-8 rounded-md object-cover shadow-md bg-slate-800" />
-                                {/* AUMENTO FONTE LISTA */}
                                 <span className="text-sm lg:text-[15px] font-bold text-slate-400 group-hover:text-white truncate flex-1 transition-colors">{game.name}</span>
                             </button>
                         ))}
@@ -247,7 +253,6 @@ export const Dashboard: React.FC = () => {
                 <div className="space-y-1.5">
                     <div className="flex items-center gap-2 px-2 mb-1.5 text-slate-500">
                         <Star size={14} className="text-casino-gold" />
-                        {/* AUMENTO FONTE */}
                         <span className="text-xs lg:text-sm font-bold uppercase tracking-widest">Destaques</span>
                     </div>
                     {sidebarFeatured.map(game => {
@@ -265,7 +270,6 @@ export const Dashboard: React.FC = () => {
                                     <img src={game.image} alt="" className="w-full h-full object-cover" />
                                 </div>
                                 <div className="flex-1 min-w-0 flex flex-col justify-center">
-                                    {/* AUMENTO FONTE LISTA */}
                                     <span className={`text-sm lg:text-[15px] font-bold truncate ${game.active ? 'text-slate-300 group-hover:text-white' : 'text-slate-600'}`}>{game.name}</span>
                                     <span className="text-[10px] text-slate-500 truncate font-medium">
                                         {game.badge ? <span className="text-casino-gold">{game.badge}</span> : 'Popular'}
@@ -284,12 +288,9 @@ export const Dashboard: React.FC = () => {
                     <div className="relative z-10">
                         <div className="flex items-center gap-2 mb-1.5">
                             <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-sm"><Crown size={14} className="text-white" /></div>
-                            {/* AUMENTO FONTE VIP */}
                             <h4 className="text-white font-bold text-sm lg:text-base leading-tight">Clube VIP</h4>
                         </div>
-                        {/* AUMENTO FONTE VIP DESC */}
                         <p className="text-xs lg:text-sm text-purple-100 mb-2 leading-tight opacity-90">Bônus exclusivos e suporte.</p>
-                        {/* AUMENTO FONTE BUTTON */}
                         <button onClick={() => navigate('/profile')} className="w-full py-2 bg-white text-purple-900 text-xs lg:text-sm font-black rounded-md uppercase tracking-wider hover:bg-purple-50 transition-colors">Ver Benefícios</button>
                     </div>
                 </div>
@@ -302,12 +303,12 @@ export const Dashboard: React.FC = () => {
             <div className="max-w-7xl mx-auto">
                 
                 {/* 
-                   HERO BANNER
+                   HERO BANNER - REMADE FOR MAX IMPACT
                 */}
                 {searchTerm === '' && (
-                    <div className="w-full mb-8 relative group rounded-3xl shadow-2xl overflow-hidden aspect-[16/9] md:aspect-[21/6] lg:max-h-[320px] max-h-[260px] border border-white/5 bg-slate-900">
+                    <div className="w-full mb-8 relative group rounded-3xl shadow-2xl overflow-hidden aspect-[16/9] md:aspect-[21/6] lg:max-h-[320px] max-h-[260px] bg-slate-900 border border-white/10 ring-1 ring-white/5">
                         
-                        {/* BANNER 1: TIGRINHO IA */}
+                        {/* BANNER 1: TIGRINHO NEON JACKPOT */}
                         <div className={`absolute inset-0 transition-opacity duration-1000 ${bannerIndex === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
                             <img 
                                 src="/assets/banner-tiger.png" 
@@ -315,23 +316,34 @@ export const Dashboard: React.FC = () => {
                                 alt="Tiger"
                                 onError={(e) => { e.currentTarget.src = "https://images.unsplash.com/photo-1634152962476-4b8a00e1915c?q=80&w=2068&auto=format&fit=crop"; }}
                             />
-                            <div className="absolute inset-0 bg-slate-950/40"></div>
-                            <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/80 to-transparent"></div>
-
-                            <div className="relative z-20 h-full flex flex-col justify-center px-6 md:px-10 lg:px-16 max-w-xl lg:max-w-2xl">
-                                <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 backdrop-blur-md w-fit mb-2 animate-slide-up">
-                                    <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-yellow-500"></span></span>
-                                    <span className="text-[8px] lg:text-[10px] font-bold text-yellow-400 uppercase tracking-widest">Live V.3.0</span>
+                            {/* Overlay Vibrante */}
+                            <div className="absolute inset-0 bg-gradient-to-r from-orange-950/90 via-purple-900/60 to-transparent"></div>
+                            
+                            <div className="relative z-20 h-full flex flex-col justify-center px-6 md:px-10 lg:px-16 max-w-xl lg:max-w-3xl">
+                                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-black/60 border border-yellow-500/50 backdrop-blur-md w-fit mb-3 animate-slide-up shadow-[0_0_15px_rgba(234,179,8,0.3)]">
+                                    <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span></span>
+                                    <span className="text-[9px] lg:text-[10px] font-black text-yellow-400 uppercase tracking-widest">Jackpot Ativo</span>
                                 </div>
-                                <h1 className="text-2xl md:text-4xl lg:text-5xl font-black text-white mb-2 leading-[0.9] tracking-tighter drop-shadow-2xl animate-slide-up" style={{ animationDelay: '100ms' }}>TIGRINHO <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-500">IA PREDICT</span></h1>
-                                <p className="text-slate-300 text-[10px] md:text-xs lg:text-sm mb-4 font-medium leading-relaxed max-w-sm lg:max-w-md drop-shadow-md animate-slide-up hidden sm:block" style={{ animationDelay: '200ms' }}>Algoritmo exclusivo capaz de identificar momentos de alta volatilidade e distribuir multiplicadores de até <span className="text-yellow-400 font-bold">2500x</span>.</p>
+                                
+                                <div className="backdrop-blur-sm bg-black/20 p-2 -ml-2 rounded-xl border border-white/5">
+                                    <h1 className="text-3xl md:text-5xl lg:text-6xl font-black text-white mb-1 leading-[0.9] tracking-tighter drop-shadow-2xl animate-slide-up" style={{ animationDelay: '100ms' }}>
+                                        TIGRINHO <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-orange-500 to-red-500 filter drop-shadow-[0_2px_10px_rgba(234,179,8,0.5)]">CYBER MAX</span>
+                                    </h1>
+                                </div>
+
+                                <p className="text-slate-100 text-xs md:text-sm lg:text-base mt-3 mb-6 font-bold leading-relaxed max-w-sm lg:max-w-lg drop-shadow-lg animate-slide-up" style={{ animationDelay: '200ms' }}>
+                                    O algoritmo mais volátil do mercado. Multiplicadores insanos de <span className="text-yellow-300 font-black text-lg bg-black/50 px-1 rounded">2500x</span> aguardam.
+                                </p>
+                                
                                 <div className="flex gap-3 animate-slide-up" style={{ animationDelay: '300ms' }}>
-                                    <Button onClick={() => navigate('/tigrinho')} variant="primary" size="sm" className="px-6 py-3 shadow-lg shadow-yellow-900/20 hover:scale-105 transition-transform rounded-lg text-xs lg:text-sm">JOGAR AGORA <Play size={14} fill="currentColor" className="ml-1.5"/></Button>
+                                    <Button onClick={() => navigate('/tigrinho')} variant="primary" size="sm" className="px-8 py-4 shadow-[0_0_30px_rgba(234,179,8,0.4)] hover:scale-105 transition-transform rounded-xl text-xs lg:text-sm border-t border-yellow-300 font-black tracking-wider">
+                                        JOGAR AGORA <Play size={16} fill="currentColor" className="ml-2"/>
+                                    </Button>
                                 </div>
                             </div>
                         </div>
 
-                        {/* BANNER 2: VIP IA PREMIUM */}
+                        {/* BANNER 2: VIP QUANTUM */}
                         <div className={`absolute inset-0 transition-opacity duration-1000 ${bannerIndex === 1 ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
                             <img 
                                 src="/assets/banner-vip.png" 
@@ -339,25 +351,36 @@ export const Dashboard: React.FC = () => {
                                 alt="VIP"
                                 onError={(e) => { e.currentTarget.src = "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=1965&auto=format&fit=crop"; }}
                             />
-                            <div className="absolute inset-0 bg-slate-950/30"></div>
-                            <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/90 to-transparent"></div>
+                            {/* Overlay Deep Tech */}
+                            <div className="absolute inset-0 bg-gradient-to-r from-indigo-950/95 via-purple-900/70 to-transparent"></div>
 
-                            <div className="relative z-20 h-full flex flex-col justify-center px-6 md:px-10 lg:px-16 max-w-xl lg:max-w-2xl">
-                                <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 backdrop-blur-md w-fit mb-2">
-                                    <Crown size={12} className="text-purple-400 fill-purple-400 animate-pulse"/><span className="text-[8px] lg:text-[10px] font-bold text-purple-400 uppercase tracking-widest">Membro Elite</span>
+                            <div className="relative z-20 h-full flex flex-col justify-center px-6 md:px-10 lg:px-16 max-w-xl lg:max-w-3xl">
+                                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-black/60 border border-cyan-500/50 backdrop-blur-md w-fit mb-3 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+                                    <Crown size={12} className="text-cyan-400 fill-cyan-400 animate-pulse"/><span className="text-[9px] lg:text-[10px] font-black text-cyan-400 uppercase tracking-widest">Sinais Premium</span>
                                 </div>
-                                <h1 className="text-2xl md:text-4xl lg:text-5xl font-black text-white mb-2 leading-[0.9] tracking-tighter drop-shadow-2xl">IA NEURAL <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400">NETWORK 4.0</span></h1>
-                                <p className="text-slate-300 text-[10px] md:text-xs lg:text-sm mb-4 font-medium leading-relaxed max-w-sm lg:max-w-md drop-shadow-md hidden sm:block">Acesso privilegiado a sinais de alta precisão. Nossa rede neural processa milhões de rodadas.</p>
+                                
+                                <div className="backdrop-blur-sm bg-black/20 p-2 -ml-2 rounded-xl border border-white/5">
+                                    <h1 className="text-3xl md:text-5xl lg:text-6xl font-black text-white mb-1 leading-[0.9] tracking-tighter drop-shadow-2xl">
+                                        REDE NEURAL <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 filter drop-shadow-[0_2px_10px_rgba(6,182,212,0.5)]">QUANTUM 4.0</span>
+                                    </h1>
+                                </div>
+
+                                <p className="text-indigo-100 text-xs md:text-sm lg:text-base mt-3 mb-6 font-bold leading-relaxed max-w-sm lg:max-w-lg drop-shadow-lg">
+                                    Acesso privilegiado à tecnologia preditiva. Aumente sua precisão com nossa <span className="text-cyan-300 font-black bg-black/50 px-1 rounded">IA de Elite</span>.
+                                </p>
+                                
                                 <div className="flex gap-3">
-                                    <button onClick={() => navigate('/profile')} className="py-2.5 px-6 rounded-lg bg-white text-black font-black text-[10px] lg:text-xs uppercase tracking-wider shadow-lg hover:bg-purple-50 transition-all active:scale-95 flex items-center gap-2 hover:scale-105">VER PLANOS <ArrowRight size={14}/></button>
+                                    <button onClick={() => navigate('/profile')} className="py-3 px-8 rounded-xl bg-white text-black font-black text-[10px] lg:text-xs uppercase tracking-widest shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:bg-cyan-50 transition-all active:scale-95 flex items-center gap-2 hover:scale-105 border-b-4 border-slate-300">
+                                        ACESSAR VIP <ArrowRight size={14}/>
+                                    </button>
                                 </div>
                             </div>
                         </div>
 
                         {/* CAROUSEL INDICATORS */}
                         <div className="absolute bottom-4 left-6 md:left-10 lg:left-16 flex gap-2 z-30">
-                            <button onClick={() => setBannerIndex(0)} className={`h-1.5 rounded-full transition-all duration-500 ${bannerIndex === 0 ? 'bg-yellow-500 w-8 shadow-[0_0_10px_rgba(234,179,8,0.8)]' : 'bg-white/20 w-2 hover:bg-white/40'}`}></button>
-                            <button onClick={() => setBannerIndex(1)} className={`h-1.5 rounded-full transition-all duration-500 ${bannerIndex === 1 ? 'bg-purple-500 w-8 shadow-[0_0_10px_rgba(168,85,247,0.8)]' : 'bg-white/20 w-2 hover:bg-white/40'}`}></button>
+                            <button onClick={() => setBannerIndex(0)} className={`h-1.5 rounded-full transition-all duration-500 ${bannerIndex === 0 ? 'bg-yellow-500 w-10 shadow-[0_0_15px_rgba(234,179,8,1)]' : 'bg-white/20 w-3 hover:bg-white/40'}`}></button>
+                            <button onClick={() => setBannerIndex(1)} className={`h-1.5 rounded-full transition-all duration-500 ${bannerIndex === 1 ? 'bg-cyan-500 w-10 shadow-[0_0_15px_rgba(6,182,212,1)]' : 'bg-white/20 w-3 hover:bg-white/40'}`}></button>
                         </div>
                     </div>
                 )}
@@ -377,7 +400,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                     
                     <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                            {/* AUMENTO FONTE BOTÕES FILTRO */}
                             <button onClick={() => setFilter('all')} className={`px-5 py-2 rounded-lg text-xs lg:text-sm font-bold uppercase tracking-wider transition-all border whitespace-nowrap shadow-sm ${filter === 'all' ? 'bg-white text-black border-white' : 'bg-slate-900 text-slate-400 border-white/5 hover:bg-slate-800 hover:text-white'}`}>Todos</button>
                             <button onClick={() => setFilter('favorites')} className={`px-5 py-2 rounded-lg text-xs lg:text-sm font-bold uppercase tracking-wider transition-all border whitespace-nowrap flex items-center gap-1.5 shadow-sm ${filter === 'favorites' ? 'bg-red-600 text-white border-red-500 shadow-red-900/20' : 'bg-slate-900 text-slate-400 border-white/5 hover:bg-slate-800 hover:text-white'}`}><Heart size={12} fill="currentColor"/> Favoritos</button>
                             <button onClick={() => setFilter('fast')} className={`px-5 py-2 rounded-lg text-xs lg:text-sm font-bold uppercase tracking-wider transition-all border whitespace-nowrap shadow-sm ${filter === 'fast' ? 'bg-blue-600 text-white border-blue-500 shadow-blue-900/20' : 'bg-slate-900 text-slate-400 border-white/5 hover:bg-slate-800 hover:text-white'}`}>Rápido</button>

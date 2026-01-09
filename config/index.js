@@ -28,30 +28,37 @@ const connectDB = async () => {
   }
 };
 
-// --- LOCK MANAGER (MONGODB BACKED) ---
-class MongoLockManager {
+// --- LOCK MANAGER (IN-MEMORY HIGH PERFORMANCE) ---
+// Substitui o MongoLockManager para evitar escritas no banco a cada clique (Mines/Slots).
+// Reduz latência de ~100ms para <1ms.
+class MemoryLockManager {
+    constructor() {
+        this.locks = new Map();
+        
+        // Garbage Collector: Remove travas órfãs a cada 30 segundos
+        // Previne deadlock se o servidor reiniciar ou uma requisição falhar drasticamente
+        setInterval(() => {
+            const now = Date.now();
+            for (const [userId, timestamp] of this.locks.entries()) {
+                if (now - timestamp > 10000) { // Max lock time: 10s
+                    this.locks.delete(userId);
+                }
+            }
+        }, 30000);
+    }
+
     async acquire(userId) {
-        try {
-            const ActionLock = mongoose.model('ActionLock');
-            await ActionLock.create({ _id: userId });
-            return true;
-        } catch (e) {
-            if (e.code === 11000) return false;
-            console.error(`[LOCK_ERR] ${e.message}`);
-            return false;
-        }
+        const uid = userId.toString();
+        if (this.locks.has(uid)) return false;
+        this.locks.set(uid, Date.now());
+        return true;
     }
 
     async release(userId) {
-        try {
-            const ActionLock = mongoose.model('ActionLock');
-            await ActionLock.deleteOne({ _id: userId });
-        } catch(e) {
-            console.warn(`[LOCK_RELEASE_FAIL] ${e.message}`);
-        }
+        this.locks.delete(userId.toString());
     }
 }
 
-const lockManager = new MongoLockManager();
+const lockManager = new MemoryLockManager();
 
 module.exports = { connectDB, lockManager, IS_PRODUCTION };

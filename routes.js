@@ -29,9 +29,11 @@ router.post('/logout', dbCheck, AuthController.logout);
 // --- USER ---
 router.post('/balance', authenticateToken, lockUserAction, UserController.getBalance);
 router.post('/user/sync', authenticateToken, UserController.syncUser);
-router.post('/user/avatar', authenticateToken, validateRequest(z.object({ avatarId: z.string() })), UserController.updateAvatar);
+router.post('/user/favorite', authenticateToken, validateRequest(z.object({ gameId: z.string() })), UserController.toggleFavorite);
+// Updated to generic Equip endpoint
+router.post('/user/equip', authenticateToken, validateRequest(z.object({ itemId: z.string(), type: z.enum(['avatar', 'frame']) })), UserController.equipItem);
 router.post('/user/verify', authenticateToken, UserController.verifyUser);
-router.get('/store', authenticateToken, UserController.getStore); // Nova Rota
+router.get('/store', authenticateToken, UserController.getStore); 
 router.post('/store/purchase', authenticateToken, lockUserAction, validateRequest(z.object({ itemId: z.string(), cost: z.number().int().positive() })), UserController.purchaseItem);
 
 // --- GAMES ---
@@ -43,7 +45,7 @@ router.post('/blackjack/hit', authenticateToken, lockUserAction, GameController.
 router.post('/blackjack/stand', authenticateToken, lockUserAction, GameController.blackjackStand);
 router.post('/blackjack/insurance', authenticateToken, lockUserAction, GameController.blackjackInsurance);
 
-// Baccarat (NOVO)
+// Baccarat
 router.post('/baccarat/deal', authenticateToken, lockUserAction, validateRequest(z.object({
     bets: z.object({
         PLAYER: z.number().min(0).optional(),

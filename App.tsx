@@ -5,9 +5,10 @@ import { User } from './types';
 import { AuthForm } from './components/AuthForm';
 import { WalletModal } from './components/WalletModal';
 import { DatabaseService } from './services/database';
-import { User as UserIcon, LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Bot, Crown, Skull, Ghost, Zap, Sword, Glasses, Star, Users, PieChart, ShieldAlert } from 'lucide-react';
+import { LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Users, ShieldAlert } from 'lucide-react';
 import { Button } from './components/UI/Button';
 import { AchievementToast } from './components/UI/AchievementToast';
+import { Avatar } from './components/UI/Avatar';
 
 // --- LAZY LOADING ---
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -15,31 +16,7 @@ const BlackjackGame = lazy(() => import('./components/BlackjackGame').then(modul
 const MinesGame = lazy(() => import('./components/MinesGame').then(module => ({ default: module.MinesGame })));
 const TigerGame = lazy(() => import('./components/TigerGame').then(module => ({ default: module.TigerGame })));
 const BaccaratGame = lazy(() => import('./components/BaccaratGame').then(module => ({ default: module.BaccaratGame })));
-const UserProfile = lazy(() => import('./components/UserProfile').then(module => ({ default: module.UserProfile })));
-
-// --- CONFIGURAÇÃO DE AVATAR (Navbar) ---
-const getNavbarAvatar = (id: string) => {
-    switch (id) {
-        // Free Avatars
-        case '1': return { icon: <UserIcon size={16} />, bg: 'from-slate-700 to-slate-800' };
-        case '2': return { icon: <Bot size={16} />, bg: 'from-cyan-900 to-cyan-700' };
-        case '3': return { icon: <Skull size={16} />, bg: 'from-red-900 to-red-700' };
-        case '4': return { icon: <Ghost size={16} />, bg: 'from-purple-900 to-purple-700' };
-        case '5': return { icon: <Sword size={16} />, bg: 'from-orange-900 to-orange-700' };
-        case '6': return { icon: <Zap size={16} />, bg: 'from-yellow-700 to-yellow-500' };
-        case '7': return { icon: <Glasses size={16} />, bg: 'from-emerald-900 to-emerald-700' };
-        case '8': return { icon: <Crown size={16} />, bg: 'from-pink-900 to-pink-700' };
-        
-        // Premium Avatars
-        case 'avatar_rich': return { icon: <span className="text-xs font-black text-white">$</span>, bg: 'from-yellow-600 to-yellow-900' };
-        case 'avatar_alien': return { icon: <span className="text-xs">👽</span>, bg: 'from-green-600 to-emerald-900' };
-        case 'avatar_robot_gold': return { icon: <Bot size={16} className="text-yellow-200" />, bg: 'from-yellow-500 to-orange-600' };
-        case 'avatar_dragon': return { icon: <Zap size={16} className="text-red-200" />, bg: 'from-red-600 to-purple-900' };
-        
-        // Default
-        default: return { icon: <UserIcon size={16} />, bg: 'from-slate-700 to-slate-800' };
-    }
-};
+const UserProfile = lazy(() => import('./hooks/UserProfile').then(module => ({ default: module.UserProfile })));
 
 // Componente de Jogadores Online (Falso/Simulado mas Determinístico)
 export const OnlinePlayersCounter = ({ compact = false }: { compact?: boolean }) => {
@@ -160,7 +137,6 @@ const BalanceDisplay = ({ balance, onClick }: { balance: number, onClick: () => 
 const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, children?: React.ReactNode, onLogout: () => void, onOpenWallet: () => void }) => {
     const location = useLocation();
     const isDashboard = location.pathname === '/';
-    const avatarConfig = getNavbarAvatar(user.avatarId);
 
     return (
         <div className="h-screen w-full bg-slate-950 text-white font-sans overflow-hidden flex flex-col relative">
@@ -184,7 +160,7 @@ const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, chi
                     <BalanceDisplay balance={user.balance} onClick={onOpenWallet} />
                     
                     <Link to="/profile" className={`flex items-center gap-2 p-1.5 rounded-lg transition-all group border border-transparent ${location.pathname === '/profile' ? 'bg-slate-800 border-white/10' : 'hover:bg-slate-800/50'}`} title="Meu Perfil">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all bg-gradient-to-br ${avatarConfig.bg} text-white shadow-md border border-white/10`}>{avatarConfig.icon}</div>
+                        <Avatar avatarId={user.avatarId} frameId={user.frameId} size="sm" showFrame={true} />
                         <span className={`text-sm font-medium hidden sm:block transition-colors ${location.pathname === '/profile' ? 'text-white' : 'text-slate-300 group-hover:text-white'}`}>{user.username}</span>
                     </Link>
                     
@@ -245,6 +221,9 @@ const AppContent: React.FC = () => {
             const restoredUser = await DatabaseService.restoreSession();
             
             if (restoredUser.vipLevel === undefined) restoredUser.vipLevel = 0;
+            if (!restoredUser.frameId) restoredUser.frameId = 'frame_1'; // Safe default
+            if (!restoredUser.favorites) restoredUser.favorites = [];
+            
             setUser(restoredUser);
             
             if (restoredUser.id) localStorage.setItem('casino_userId', restoredUser.id);
@@ -275,6 +254,9 @@ const AppContent: React.FC = () => {
 
   const handleLogin = (userData: User) => {
     if (userData.vipLevel === undefined) userData.vipLevel = 0;
+    if (!userData.frameId) userData.frameId = 'frame_1';
+    if (!userData.favorites) userData.favorites = [];
+    
     localStorage.setItem('casino_userId', userData.id);
     setUser(userData);
     setSessionKicked(false); // Reset kick state on fresh login
@@ -345,7 +327,7 @@ const AppContent: React.FC = () => {
     <>
         <AchievementToast />
         <Routes>
-            <Route path="/" element={!user ? <AuthForm onLogin={handleLogin} /> : <ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><Dashboard /></ProtectedRoute>} />
+            <Route path="/" element={!user ? <AuthForm onLogin={handleLogin} /> : <ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><Dashboard user={user} updateUser={handleUpdateUser}/></ProtectedRoute>} />
             
             <Route path="/blackjack" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BlackjackGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             <Route path="/mines" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><MinesGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />

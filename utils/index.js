@@ -5,17 +5,23 @@ const { IS_PRODUCTION } = require('../config');
 
 // --- STORE ITEMS CONFIGURATION ---
 const STORE_ITEMS = [
-    // Consumíveis
-    { id: 'insurance', name: 'Seguro 5%', description: 'Protege 5% da próxima aposta', cost: 800, type: 'consumable', icon: 'shield' },
+    // --- CONSUMÁVEIS ---
+    { id: 'insurance', name: 'Seguro 5%', description: 'Protege 5% da próxima aposta.', cost: 800, type: 'consumable', category: 'consumable', rarity: 'legendary', icon: 'shield' },
     
-    // Cosméticos (Molduras e Avatares)
-    { id: 'frame_gold', name: 'Moldura Gold', description: 'Borda de ouro no perfil', cost: 2500, type: 'cosmetic', icon: 'frame' },
-    
-    // Avatares Premium
-    { id: 'avatar_rich', name: 'Mr. Monopoly', description: 'Avatar exclusivo de magnata', cost: 5000, type: 'cosmetic', icon: 'avatar_rich' },
-    { id: 'avatar_alien', name: 'Alien VIP', description: 'De outro mundo', cost: 3000, type: 'cosmetic', icon: 'avatar_alien' },
-    { id: 'avatar_robot_gold', name: 'Golden Bot', description: 'Robô banhado a ouro', cost: 8000, type: 'cosmetic', icon: 'avatar_robot_gold' },
-    { id: 'avatar_dragon', name: 'Dragon Lord', description: 'Poder supremo', cost: 10000, type: 'cosmetic', icon: 'avatar_dragon' },
+    // --- MOLDURAS (FRAMES) ---
+    { id: 'frame_1', name: 'Padrão', description: 'Estilo clássico.', cost: 0, type: 'cosmetic', category: 'frame', rarity: 'common', icon: 'frame' },
+    { id: 'frame_silver', name: 'Prata Polida', description: 'Acabamento metálico.', cost: 1500, type: 'cosmetic', category: 'frame', rarity: 'rare', icon: 'frame' },
+    { id: 'frame_gold', name: 'Ouro VIP', description: 'Borda dourada animada.', cost: 3000, type: 'cosmetic', category: 'frame', rarity: 'epic', icon: 'frame' },
+    { id: 'frame_neon', name: 'Cyber Neon', description: 'Luzes pulsantes futuristas.', cost: 5000, type: 'cosmetic', category: 'frame', rarity: 'epic', icon: 'frame' },
+    { id: 'frame_royal', name: 'Realeza', description: 'Detalhes de coroa e rubis.', cost: 8000, type: 'cosmetic', category: 'frame', rarity: 'legendary', icon: 'frame' },
+    { id: 'frame_glitch', name: 'System Error', description: 'Efeito de distorção digital.', cost: 10000, type: 'cosmetic', category: 'frame', rarity: 'legendary', icon: 'frame' },
+
+    // --- AVATARES PREMIUM ---
+    { id: 'avatar_rich', name: 'Sr. Monopoly', description: 'Avatar exclusivo de magnata.', cost: 5000, type: 'cosmetic', category: 'avatar', rarity: 'epic', icon: 'avatar_rich' },
+    { id: 'avatar_alien', name: 'Alien VIP', description: 'Visitante de outro mundo.', cost: 3000, type: 'cosmetic', category: 'avatar', rarity: 'rare', icon: 'avatar_alien' },
+    { id: 'avatar_robot_gold', name: 'Robô Dourado', description: 'Inteligência suprema.', cost: 8000, type: 'cosmetic', category: 'avatar', rarity: 'legendary', icon: 'avatar_robot_gold' },
+    { id: 'avatar_dragon', name: 'Lorde Dragão', description: 'Poder mítico ancestral.', cost: 12000, type: 'cosmetic', category: 'avatar', rarity: 'legendary', icon: 'avatar_dragon' },
+    { id: 'avatar_samurai', name: 'Ronin', description: 'Guerreiro silencioso.', cost: 2000, type: 'cosmetic', category: 'avatar', rarity: 'rare', icon: 'avatar_samurai' },
 ];
 
 // --- LOGGER ---
@@ -23,10 +29,8 @@ const logEvent = (type, message) => {
     if (process.env.SILENT_LOGS === 'true' || process.env.SILENT_LOGS === '1') return;
     
     // SECURITY: Prevent metric/debug leaks in production unless explicitly overridden.
-    // This hides "Engine Optimization" logs from production stdout.
     if (IS_PRODUCTION && (type === 'METRIC' || type === 'DEBUG')) return;
     
-    // Async Logging: Unblock Event Loop
     setImmediate(() => {
         const ts = new Date().toISOString();
         if (type === 'METRIC') { 
@@ -41,14 +45,14 @@ const logEvent = (type, message) => {
     });
 };
 
-const logGameResult = (gameName, username, resultAmount, currentSessionNet, riskLevel, adjustmentTag) => {
+const logGameResult = (gameName, username, resultAmount, currentSessionNet, riskLevel, adjustmentTag, roiString) => {
     try {
         const isWin = resultAmount > 0;
         const sign = isWin ? '+' : '';
-        const msg = `GAME: ${gameName} | User: ${username} | Result: ${sign}${resultAmount.toFixed(2)} | Risk: ${riskLevel}`;
+        const roiDisplay = roiString ? ` | ROI: ${roiString}` : '';
+        const msg = `GAME: ${gameName} | User: ${username} | Result: ${sign}${resultAmount.toFixed(2)} | Risk: ${riskLevel}${roiDisplay}`;
         logEvent('AUDIT', msg);
         
-        // SECURITY: Never log adjustment tags in production to hide engine logic (e.g. DYNAMIC_GRID)
         if (adjustmentTag && !IS_PRODUCTION) {
             logEvent('METRIC', `Engine Optimization: ${adjustmentTag} applied for ${username}`);
         }

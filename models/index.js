@@ -1,24 +1,35 @@
 
 const mongoose = require('mongoose');
 
-// --- USER SCHEMA ---
-const activeGameSchema = new mongoose.Schema({
+// --- GAME SESSION SCHEMA (Separated from User) ---
+// Armazena apenas o estado temporário do jogo ativo.
+const gameSessionSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true },
     type: { type: String, default: 'NONE' },
     bet: { type: Number, default: 0 },
     sideBets: { perfectPairs: { type: Number, default: 0 }, dealerBust: { type: Number, default: 0 } },
     insuranceBet: { type: Number, default: 0 },
+    
+    // Blackjack Specifics
     bjDeck: { type: Array, default: [], select: false }, 
     bjPlayerHand: { type: Array, default: [] },
     bjDealerHand: { type: Array, default: [] },
     bjStatus: String,
+    
+    // Mines Specifics
     minesList: { type: Array, default: [], select: false },
     minesCount: { type: Number, default: 0 },
     minesRevealed: { type: Array, default: [] },
     minesMultiplier: { type: Number, default: 1.0 },
     minesGameOver: { type: Boolean, default: false },
+    
+    // Tiger Specifics (Simpler state)
+    // ...Tiger geralmente resolve num único request, mas mantemos estrutura para consistência
+    
     riskLevel: { type: String, default: 'NORMAL' },
     serverSeed: { type: String }, 
-}, { _id: false });
+    updatedAt: { type: Date, default: Date.now, expires: 86400 } // Auto-delete após 24h de inatividade (Cleanup de sessões órfãs)
+});
 
 const userSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
@@ -43,6 +54,7 @@ const userSchema = new mongoose.Schema({
   
   // Profile
   avatarId: { type: String, default: '1' },
+  frameId: { type: String, default: 'frame_1' }, // Default basic frame
   isVerified: { type: Boolean, default: false },
   documentsStatus: { type: String, default: 'NONE' },
   vipLevel: { type: Number, default: 0 },
@@ -52,17 +64,18 @@ const userSchema = new mongoose.Schema({
   missions: { type: Array, default: [] },
   unlockedTrophies: { type: [String], default: [] },
   ownedItems: { type: [String], default: [] }, 
+  favorites: { type: [String], default: [] }, // NEW: Favorites Persistence
   
-  // NEW: Lifetime Stats for Achievements
+  // Stats
   stats: {
       totalGames: { type: Number, default: 0 },
       totalWins: { type: Number, default: 0 },
       totalBlackjacks: { type: Number, default: 0 },
       highestWin: { type: Number, default: 0 },
-      totalWagered: { type: Number, default: 0 }
-  },
-
-  activeGame: { type: activeGameSchema, default: () => ({}) }
+      totalWagered: { type: Number, default: 0 },
+      totalWonAmount: { type: Number, default: 0 } // New: Required for Test Account ROI
+  }
+  // activeGame removido daqui para reduzir payload
 }, { timestamps: true });
 
 // --- TRANSACTION SCHEMA ---
@@ -80,7 +93,7 @@ transactionSchema.index({ userId: 1, createdAt: -1 });
 // --- GAME LOG SCHEMA ---
 const gameLogSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
-    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }, // AUDIT LINK
+    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }, 
     game: { type: String, required: true },
     bet: { type: Number, required: true },
     payout: { type: Number, default: 0 },
@@ -92,6 +105,9 @@ const gameLogSchema = new mongoose.Schema({
     engineAdjustment: { type: String }
 }, { timestamps: true });
 
+// TTL: Logs são deletados automaticamente após 90 dias
+gameLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
+
 // --- ACTION LOCK SCHEMA (Mutex) ---
 const actionLockSchema = new mongoose.Schema({
     _id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, 
@@ -100,8 +116,8 @@ const actionLockSchema = new mongoose.Schema({
 
 module.exports = {
     User: mongoose.model('User', userSchema),
+    GameSession: mongoose.model('GameSession', gameSessionSchema),
     Transaction: mongoose.model('Transaction', transactionSchema),
     GameLog: mongoose.model('GameLog', gameLogSchema),
     ActionLock: mongoose.model('ActionLock', actionLockSchema)
 };
-    
