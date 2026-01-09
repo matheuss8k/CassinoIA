@@ -9,9 +9,7 @@ const calculateRisk = (user, currentBet) => {
     let risk = 'NORMAL';
     let triggers = [];
 
-    // 1. All-in Trap: Aposta > 90% da banca
-    // Nota: user.balance aqui é o saldo REMANESCENTE (pós-aposta).
-    // Reconstruímos o saldo original para o cálculo correto da porcentagem.
+    // 1. All-in Trap: Aposta > 90% da banca original
     const originalBalance = user.balance + currentBet;
     const betRatio = originalBalance > 0 ? (currentBet / originalBalance) : 0;
     
@@ -25,32 +23,47 @@ const calculateRisk = (user, currentBet) => {
         triggers.push('SNIPER_PROTOCOL');
     }
 
-    // 3. ROI Guard: Lucro > 15% do depósito total
-    const baseCapital = user.totalDeposits > 0 ? user.totalDeposits : 100; // Evita divisão por zero
-    const currentProfit = user.sessionProfit; // Lucro da sessão atual
-    // Se o saldo total for muito maior que os depósitos, também ativa
-    const totalProfitRatio = (user.balance - user.totalDeposits) / baseCapital;
+    // 3. ROI Guard: Lucro Excessivo vs Depósitos
+    // Lógica ajustada para Contas Baleia/Teste (Depósitos = 0)
     
-    if (currentProfit > (baseCapital * 0.15) || totalProfitRatio > 0.5) {
-        risk = 'EXTREME';
-        triggers.push('ROI_GUARD');
+    const hasRealDeposits = user.totalDeposits > 10;
+
+    // Se tiver depósitos, a base é o total depositado. 
+    // Se não (baleia manual), a base é o próprio saldo (evita divisão por zero ou números pequenos).
+    const baseCapital = hasRealDeposits ? user.totalDeposits : Math.max(user.balance, 100); 
+    
+    // Cálculo de Lucro Líquido Total
+    // Se é conta de teste (sem depósitos), assumimos lucro histórico 0 para não travar a conta imediatamente.
+    // Isso impede o cálculo: (10000 - 0) / 100 = 100x lucro.
+    const totalNetProfit = hasRealDeposits ? (user.balance - user.totalDeposits) : 0;
+
+    const currentProfit = user.sessionProfit; // Lucro da sessão atual
+    const totalProfitRatio = totalNetProfit / baseCapital;
+    
+    // Regras Estritas (50% de tolerância)
+    if (currentProfit > (baseCapital * 0.50) || totalProfitRatio > 0.50) {
+        // Apenas ativa se o saldo for significativo (> 100 reais)
+        if (user.balance > 100) {
+            risk = 'EXTREME';
+            triggers.push('ROI_GUARD');
+        }
     }
 
-    // 4. Kill Switch: 3 vitórias seguidas
-    if (user.consecutiveWins >= 3) {
+    // 4. Kill Switch: 3 vitórias seguidas (Mantido, mas menos agressivo em saldo baixo)
+    if (user.consecutiveWins >= 4) { // Subiu para 4 para dar mais respiro
         risk = 'EXTREME';
         triggers.push('KILL_SWITCH_STREAK');
     }
 
-    // 5. Anti-Martingale: Dobra após derrota ou vitória (comportamento padrão de alavancagem)
+    // 5. Anti-Martingale: Dobra após derrota ou vitória
     if (user.previousBet > 0 && currentBet >= (user.previousBet * 1.95) && currentBet <= (user.previousBet * 2.1)) {
-        // Se já era alto, vira extremo. Se era normal, vira high.
         risk = risk === 'EXTREME' ? 'EXTREME' : 'HIGH';
         triggers.push('MARTINGALE_DETECTED');
     }
 
-    // Fallback: Se não caiu em nada mas o RTP do usuário está muito alto
-    if (risk === 'NORMAL' && user.stats?.totalWagered > 100 && (user.stats?.totalWins / user.stats?.totalGames) > 0.6) {
+    // Fallback: RTP Correction
+    // Se o usuário está ganhando muito a longo prazo (> 60% win rate), força High
+    if (risk === 'NORMAL' && user.stats?.totalWagered > 500 && (user.stats?.totalWins / user.stats?.totalGames) > 0.65) {
         risk = 'HIGH';
         triggers.push('RTP_CORRECTION');
     }
@@ -63,7 +76,6 @@ const calculateRisk = (user, currentBet) => {
 };
 
 // --- STATS BATCHER (Write-Behind Pattern) ---
-// Reduz I/O agrupando incrementos de estatísticas em memória e salvando em lote.
 class StatsBatcher {
     constructor() {
         this.buffer = new Map(); // userId -> { incs: {} }
@@ -73,10 +85,6 @@ class StatsBatcher {
         setInterval(() => this.flush(), this.FLUSH_INTERVAL);
     }
 
-    /**
-     * Adiciona um incremento ao buffer.
-     * Ex: add(userId, { 'stats.totalGames': 1, 'stats.totalWagered': 10 })
-     */
     add(userId, increments) {
         const uid = userId.toString();
         if (!this.buffer.has(uid)) {
@@ -89,13 +97,9 @@ class StatsBatcher {
         }
     }
 
-    /**
-     * Escreve os dados acumulados no MongoDB usando bulkWrite.
-     */
     async flush() {
         if (this.buffer.size === 0) return;
 
-        // Copia e limpa o buffer imediatamente para não bloquear novas escritas
         const currentBatch = new Map(this.buffer);
         this.buffer.clear();
 
@@ -113,15 +117,9 @@ class StatsBatcher {
 
         if (ops.length > 0) {
             try {
-                // ordered: false permite que se um falhar, os outros continuem.
-                // Alta performance para updates em massa.
                 await User.bulkWrite(ops, { ordered: false });
-                // Em dev, descomente para ver a economia:
-                // console.log(`[STATS] Flushed stats for ${ops.length} users.`);
             } catch (e) {
                 console.error("[STATS] Batch Write Error:", e);
-                // Em caso de erro crítico, poderíamos tentar re-adicionar ao buffer,
-                // mas para stats, é melhor perder alguns contadores do que travar o sistema.
             }
         }
     }
@@ -132,7 +130,6 @@ const statsBatcher = new StatsBatcher();
 // --- ACHIEVEMENT SYSTEM ---
 const AchievementSystem = {
     check: async (userId, gameContext) => {
-        // gameContext: { game: 'BLACKJACK'|'MINES'|'TIGER', bet: number, payout: number, extra: object }
         try {
             const user = await User.findById(userId);
             if (!user) return;
@@ -140,25 +137,17 @@ const AchievementSystem = {
             const unlockedNow = [];
             const currentTrophies = user.unlockedTrophies || [];
             
-            // Helper to add unique
             const unlock = (id) => {
                 if (!currentTrophies.includes(id)) unlockedNow.push(id);
             };
 
-            // Calculate Profit & Multiplier
             const profit = gameContext.payout - gameContext.bet;
             const isWin = profit > 0;
             const multiplier = gameContext.bet > 0 ? (gameContext.payout / gameContext.bet) : 0;
 
-            // --- TRADITIONAL CHECKS (Immediate logic) ---
             if (isWin) unlock('first_win');
             if (gameContext.bet >= 500) unlock('high_roller');
             if (gameContext.game === 'MINES' && gameContext.extra?.revealedCount >= 20) unlock('sniper');
-            
-            // Check stats taking into account what is IN THE DB currently.
-            // Note: Batching means user.stats might be slightly behind (up to 5s).
-            // This is acceptable for "Play 50 games".
-            // We verify: (DB Value + 1 Current Game) >= Target
             
             if ((user.stats?.totalGames || 0) + 1 >= 50) unlock('club_50');
             if ((user.stats?.totalGames || 0) + 1 >= 30) unlock('loyal_player');
@@ -175,9 +164,6 @@ const AchievementSystem = {
                 unlock('phoenix');
             }
 
-            // --- PREPARE UPDATES ---
-            
-            // 1. Stats to Buffer (High Frequency, Low Criticality)
             const statsIncrements = {
                 'stats.totalGames': 1,
                 'stats.totalWagered': gameContext.bet,
@@ -185,11 +171,8 @@ const AchievementSystem = {
                 'stats.totalBlackjacks': (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) ? 1 : 0
             };
             
-            // Adiciona ao buffer para escrita posterior
             statsBatcher.add(userId, statsIncrements);
 
-            // 2. Direct Updates (Critical UX Events like Trophies or High Score)
-            // Se ganhou troféu OU bateu recorde de maior ganho, escrevemos IMEDIATAMENTE.
             const directUpdate = {};
             let shouldWriteImmediately = false;
 
@@ -231,10 +214,9 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
         session = await mongoose.startSession();
         session.startTransaction();
 
-        const opts = { session, new: true, lean: true }; // OPTIMIZATION: Use lean()
+        const opts = { session, new: true, lean: true };
         const query = { _id: userId };
         
-        // Optimistic Locking for Balance
         if (balanceChangeCents < 0) {
             query.balance = { $gte: fromCents(Math.abs(balanceChangeCents)) };
         }
@@ -256,7 +238,6 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             if (game !== 'WALLET') sets.lastGamePlayed = game;
         }
 
-        // State Integrity
         if (initialGameState) {
             sets.activeGame = initialGameState;
         } else if (game !== 'WALLET' && (type === 'WIN' || type === 'REFUND')) {
@@ -275,7 +256,6 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
             throw new Error('INSUFFICIENT_FUNDS');
         }
         
-        // Audit Hash
         const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 }).session(session).lean();
         const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
         
@@ -286,7 +266,6 @@ const processTransaction = async (userId, amount, type, game = 'WALLET', referen
 
         await session.commitTransaction();
         
-        // Manual ID fix for lean()
         u.id = u._id;
         u.lastTransactionId = tx._id;
         result = u;
@@ -322,14 +301,12 @@ const saveGameLog = async (userId, game, bet, payout, resultSnapshot, riskLevel,
     } catch(e) { console.error("DB Log Error:", e.message); }
 };
 
-// --- GAME STATE HELPER OPTIMIZED ---
 const GameStateHelper = {
-    // ATOMIC: Writes state AND returns new data in one go.
     save: async (userId, gameState) => {
         return await User.findOneAndUpdate(
             { _id: userId }, 
             { $set: { activeGame: gameState } },
-            { new: true, lean: true, projection: 'balance activeGame' } // Return updated doc
+            { new: true, lean: true, projection: 'balance activeGame' } 
         );
     },
     clear: async (userId) => {

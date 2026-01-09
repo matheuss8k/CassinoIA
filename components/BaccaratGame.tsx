@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, GameStatus } from '../types';
 import { useBaccaratLogic, BaccaratBetType, BaccHistoryItem, RoadmapItem } from '../hooks/useBaccaratLogic';
@@ -15,7 +14,13 @@ interface BaccaratGameProps {
 
 // --- SUB-COMPONENTES VISUAIS ---
 
-const ChipBtn = ({ val, selected, onClick }: { val: number, selected: boolean, onClick: () => void }) => (
+interface ChipBtnProps {
+    val: number;
+    selected: boolean;
+    onClick: () => void;
+}
+
+const ChipBtn: React.FC<ChipBtnProps> = ({ val, selected, onClick }) => (
     <button 
         onClick={onClick}
         className={`

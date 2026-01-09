@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { User, GameStatus, Card } from '../types';
 import { DatabaseService } from '../services/database';
@@ -82,7 +81,7 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
 
     const isMounted = useRef(true);
 
-    const totalBet = useMemo(() => Object.values(bets).reduce((a, b) => a + b, 0), [bets]);
+    const totalBet = useMemo(() => Object.values(bets).reduce((a: number, b: number) => a + b, 0), [bets]);
 
     useEffect(() => {
         isMounted.current = true;
@@ -111,7 +110,7 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
 
     const rebet = () => {
         if (status !== GameStatus.Idle || !lastBets) return;
-        const lastTotal = Object.values(lastBets).reduce((a, b) => a + b, 0);
+        const lastTotal = Object.values(lastBets).reduce((a: number, b: number) => a + b, 0);
         if (lastTotal > user.balance) {
             setNotifyMsg("Saldo insuficiente para repetir");
             return;
