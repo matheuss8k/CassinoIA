@@ -28,6 +28,18 @@ const gameSessionSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now, expires: 86400 } // Auto-delete após 24h de inatividade
 });
 
+// --- MISSION SCHEMA (Structured for Atomic Updates) ---
+const missionSchema = new mongoose.Schema({
+    id: { type: String, required: true },
+    type: { type: String, required: true },
+    description: String,
+    target: { type: Number, required: true },
+    current: { type: Number, default: 0 },
+    rewardPoints: { type: Number, required: true },
+    completed: { type: Boolean, default: false },
+    claimed: { type: Boolean, default: false }
+}, { _id: false }); // _id false para facilitar comparações simples de array
+
 const userSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   username: { type: String, required: true, unique: true, index: true },
@@ -58,8 +70,8 @@ const userSchema = new mongoose.Schema({
   
   // Gamification
   loyaltyPoints: { type: Number, default: 0 },
-  missions: { type: Array, default: [] },
-  lastDailyReset: { type: String, default: '' }, // CORREÇÃO CRÍTICA: Campo adicionado para persistir a data
+  missions: { type: [missionSchema], default: [] }, // Tipagem Forte
+  lastDailyReset: { type: String, default: '' }, 
   unlockedTrophies: { type: [String], default: [] },
   ownedItems: { type: [String], default: [] }, 
   favorites: { type: [String], default: [] }, 
@@ -75,14 +87,15 @@ const userSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-// --- TRANSACTION SCHEMA ---
+// --- TRANSACTION SCHEMA (AUDIT LEDGER) ---
 const transactionSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    type: { type: String, enum: ['DEPOSIT', 'WITHDRAW', 'BET', 'WIN', 'REFUND'], required: true },
+    type: { type: String, enum: ['DEPOSIT', 'WITHDRAW', 'BET', 'WIN', 'REFUND', 'MISSION_REWARD'], required: true },
+    currency: { type: String, enum: ['BRL', 'POINTS'], default: 'BRL' }, // Campo Crítico para Auditoria de Pontos
     amount: { type: Number, required: true }, 
     balanceAfter: { type: Number, required: true },
     game: { type: String, default: 'WALLET' },
-    referenceId: { type: String }, 
+    referenceId: { type: String }, // Pode guardar o ID da Missão
     integrityHash: { type: String }, 
 }, { timestamps: true });
 transactionSchema.index({ userId: 1, createdAt: -1 });

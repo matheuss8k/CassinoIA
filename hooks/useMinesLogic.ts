@@ -136,18 +136,29 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
     }, []);
 
     // Helper: Game Updates (Achievements & Missions)
-    const checkGameUpdates = (data: any) => {
+    // Note: Returns the partial object to be merged, DOES NOT call updateUser directly to avoid race conditions.
+    const getGameUpdates = (data: any): Partial<User> => {
+        const updates: Partial<User> = {};
+        
         if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
             window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
-            updateUser({ unlockedTrophies: [...new Set([...(user.unlockedTrophies || []), ...data.newTrophies])] });
+            updates.unlockedTrophies = [...new Set([...(user.unlockedTrophies || []), ...data.newTrophies])];
         }
+        
         if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
             window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
         }
-        // Critical Fix: Update local user state with the latest mission list from backend
+        
+        // Critical Fix for Missions Lag:
+        // Always prefer the missions list from backend if provided.
         if (data.missions && Array.isArray(data.missions)) {
-            updateUser({ missions: data.missions });
+            updates.missions = data.missions;
         }
+        
+        if (data.newBalance !== undefined) updates.balance = data.newBalance;
+        if (data.loyaltyPoints !== undefined) updates.loyaltyPoints = data.loyaltyPoints;
+
+        return updates;
     };
 
     // Helper: Sound
@@ -262,10 +273,11 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
             const response: any = await DatabaseService.minesStart(user.id, bet, mineCount);
             if(!isMounted.current) return;
 
-            checkGameUpdates(response);
+            // Update User State (Merged)
+            const updates = getGameUpdates(response);
+            updateUser(updates);
 
             setStatus(GameStatus.Playing);
-            updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
             if (response.publicSeed) setServerSeedHash(response.publicSeed);
 
             setGrid(Array.from({ length: GRID_SIZE }, (_, i) => ({ id: i, isRevealed: false, content: 'unknown' })));
@@ -289,7 +301,10 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
         try {
             const result = await DatabaseService.minesReveal(user.id, index);
             if(!isMounted.current) return;
-            checkGameUpdates(result);
+            
+            // Updates Merged
+            const updates = getGameUpdates(result);
+            updateUser(updates);
 
             const newGrid = [...grid];
             newGrid[index].isRevealed = true;
@@ -299,7 +314,7 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
                 setStatus(GameStatus.GameOver);
                 playSound('bomb');
                 setLossPopup(true);
-                if (result.newBalance !== undefined) updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
+                
                 if (result.mines) {
                     result.mines.forEach((mineIdx: number) => {
                         newGrid[mineIdx].content = 'mine';
@@ -316,7 +331,6 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
                 setRevealedCount(prev => prev + 1);
                 setProfit(result.profit);
                 setCurrentMultiplier(result.multiplier);
-                if (result.newBalance !== undefined) updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
 
                 if (result.status === 'WIN_ALL') {
                     setStatus(GameStatus.GameOver);
@@ -355,8 +369,11 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
         try {
             const result = await DatabaseService.minesCashout(user.id);
             if(!isMounted.current) return;
-            checkGameUpdates(result);
-            updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
+            
+            // Updates Merged
+            const updates = getGameUpdates(result);
+            updateUser(updates);
+            
             playSound('cashout');
             
             const winValue = result.profit || currentWinValue; 

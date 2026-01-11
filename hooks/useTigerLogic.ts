@@ -142,18 +142,22 @@ export const useTigerLogic = (user: User, updateUser: (data: Partial<User>) => v
     }, []);
 
     // --- HELPERS ---
-    const checkGameUpdates = (data: any) => {
+    const getGameUpdates = (data: any): Partial<User> => {
+        const updates: Partial<User> = {};
         if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
             window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
-            const currentTrophies = user.unlockedTrophies || [];
-            updateUser({ unlockedTrophies: [...new Set([...currentTrophies, ...data.newTrophies])] });
+            updates.unlockedTrophies = [...new Set([...(user.unlockedTrophies || []), ...data.newTrophies])];
         }
         if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
             window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
         }
         if (data.missions && Array.isArray(data.missions)) {
-            updateUser({ missions: data.missions });
+            updates.missions = data.missions;
         }
+        if (data.newBalance !== undefined) updates.balance = data.newBalance;
+        if (data.loyaltyPoints !== undefined) updates.loyaltyPoints = data.loyaltyPoints;
+        
+        return updates;
     };
 
     const playSound = useCallback((type: 'spin_start' | 'stop' | 'win_small' | 'win_big' | 'multiplier') => {
@@ -265,10 +269,10 @@ export const useTigerLogic = (user: User, updateUser: (data: Partial<User>) => v
             setGrid(response.grid);
             if (response.publicSeed) setServerSeedHash(response.publicSeed);
             
-            // ATUALIZADO: Usando checkGameUpdates para verificar Conquistas E Missões
-            checkGameUpdates(response);
+            // ATUALIZADO: Usando getGameUpdates para unificar atualizações
+            const updates = getGameUpdates(response);
+            updateUser(updates);
 
-            updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
             playSound('stop');
             
             const newItem: SpinHistoryItem = { id: Date.now(), amount: bet, win: response.totalWin, multiplier: response.totalWin > 0 ? response.totalWin / bet : 0, timestamp: new Date() };

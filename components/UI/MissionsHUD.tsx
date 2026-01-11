@@ -2,14 +2,15 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { User, Mission } from '../../types';
-import { Target, ChevronRight, X, Trophy, CheckCircle2, Zap, Gift, Coins, Clock, AlertTriangle } from 'lucide-react';
+import { Target, ChevronRight, X, Trophy, CheckCircle2, Zap, Gift, Coins, Clock, AlertTriangle, Loader2 } from 'lucide-react';
 import { DatabaseService } from '../../services/database';
 
 interface MissionsHUDProps {
     user: User;
+    updateUser: (data: Partial<User>) => void;
 }
 
-export const MissionsHUD: React.FC<MissionsHUDProps> = ({ user }) => {
+export const MissionsHUD: React.FC<MissionsHUDProps> = ({ user, updateUser }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [isAnimating, setIsAnimating] = useState(false);
     const [progressToast, setProgressToast] = useState<string | null>(null);
@@ -83,12 +84,21 @@ export const MissionsHUD: React.FC<MissionsHUDProps> = ({ user }) => {
             } catch(e) {}
 
             if (result.success) {
-                mission.claimed = true; // Optimistic update
-                window.location.reload(); 
+                // ATUALIZAÇÃO REATIVA (SEM RELOAD)
+                updateUser({
+                    loyaltyPoints: result.newPoints,
+                    missions: result.missions
+                });
+                
+                // Emite evento para o Toast de Conquistas/Notificações se necessário
+                window.dispatchEvent(new CustomEvent('mission-claimed', { detail: { points: mission.rewardPoints } }));
+            } else {
+                console.error("Erro no resgate:", result);
             }
 
         } catch (e) {
-            console.error("Claim failed", e);
+            console.error("Falha ao resgatar missão:", e);
+            alert("Erro de conexão ao resgatar prêmio. Tente novamente.");
         } finally {
             setClaimingId(null);
             setTimeout(() => setRewardAnim({ ...rewardAnim, show: false }), 1000);
@@ -272,6 +282,7 @@ export const MissionsHUD: React.FC<MissionsHUDProps> = ({ user }) => {
                         const isDone = mission.completed; 
                         const isClaimed = mission.claimed; 
                         const isReadyToClaim = isDone && !isClaimed;
+                        const isClaimingThis = claimingId === mission.id;
 
                         return (
                             <div key={mission.id} className={`relative p-3 rounded-xl border transition-all duration-300 overflow-hidden group ${isReadyToClaim ? 'bg-gradient-to-r from-yellow-900/40 to-slate-900 border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.15)]' : isClaimed ? 'bg-green-900/10 border-green-500/20 opacity-70' : 'bg-slate-900/80 border-white/5 hover:border-indigo-500/30'}`}>
@@ -282,7 +293,16 @@ export const MissionsHUD: React.FC<MissionsHUDProps> = ({ user }) => {
                                 </div>
                                 <div className="flex justify-between items-end relative z-10 mt-2">
                                     <div className="text-[10px] text-slate-500 font-mono">{isClaimed ? 'Concluída' : isReadyToClaim ? 'Pronto para resgate!' : 'Em andamento'}</div>
-                                    {isReadyToClaim ? (<button onClick={(e) => handleClaim(mission, e)} disabled={claimingId === mission.id} className="bg-yellow-500 hover:bg-yellow-400 text-black text-[10px] font-black uppercase px-3 py-1.5 rounded-lg shadow-lg hover:shadow-yellow-500/50 transition-all active:scale-95 flex items-center gap-1 animate-bounce">{claimingId === mission.id ? '...' : 'RESGATAR'} <Gift size={12} /></button>) : (<div className={`font-mono font-black text-xs ${isClaimed ? 'text-green-500' : 'text-indigo-300'}`}>{Math.floor(mission.current)} <span className="text-slate-600 text-[9px]">/ {mission.target}</span></div>)}
+                                    {isReadyToClaim ? (
+                                        <button 
+                                            onClick={(e) => handleClaim(mission, e)} 
+                                            disabled={isClaimingThis || claimingId !== null} 
+                                            className={`bg-yellow-500 hover:bg-yellow-400 text-black text-[10px] font-black uppercase px-3 py-1.5 rounded-lg shadow-lg hover:shadow-yellow-500/50 transition-all active:scale-95 flex items-center gap-1 ${isClaimingThis ? 'opacity-80 cursor-wait' : 'animate-bounce'}`}
+                                        >
+                                            {isClaimingThis ? <Loader2 size={12} className="animate-spin" /> : <Gift size={12} />}
+                                            {isClaimingThis ? 'RESGATANDO...' : 'RESGATAR'} 
+                                        </button>
+                                    ) : (<div className={`font-mono font-black text-xs ${isClaimed ? 'text-green-500' : 'text-indigo-300'}`}>{Math.floor(mission.current)} <span className="text-slate-600 text-[9px]">/ {mission.target}</span></div>)}
                                 </div>
                             </div>
                         );

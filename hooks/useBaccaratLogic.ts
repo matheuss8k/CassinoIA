@@ -101,19 +101,21 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
         };
     }, []);
 
-    // NEW: Generic Checker
-    const checkGameUpdates = (data: any) => {
+    const getGameUpdates = (data: any): Partial<User> => {
+        const updates: Partial<User> = {};
         if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
             window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
-            const currentTrophies = user.unlockedTrophies || [];
-            updateUser({ unlockedTrophies: [...new Set([...currentTrophies, ...data.newTrophies])] });
+            updates.unlockedTrophies = [...new Set([...(user.unlockedTrophies || []), ...data.newTrophies])];
         }
         if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
             window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
         }
         if (data.missions && Array.isArray(data.missions)) {
-            updateUser({ missions: data.missions });
+            updates.missions = data.missions;
         }
+        if (data.newBalance !== undefined) updates.balance = data.newBalance;
+        
+        return updates;
     };
 
     const placeBet = (type: BaccaratBetType) => {
@@ -160,8 +162,11 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
             const data: any = await DatabaseService.baccaratDeal(user.id, bets);
             if (!isMounted.current) return;
 
-            // ATUALIZADO: Verificação de Missões/Conquistas
-            checkGameUpdates(data);
+            const updates = getGameUpdates(data);
+            // No Baccarat deal returns final state immediately in API, but animation plays out.
+            // We can update missions now, but balance updates should wait or happen now?
+            // Safer to happen now for consistency.
+            updateUser(updates);
 
             setLoading(false);
             setStatus(GameStatus.Dealing);
@@ -226,7 +231,6 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
             });
 
             setPayout(data.payout);
-            updateUser({ balance: data.newBalance });
             
             if (data.payout > 0) playSound('win');
 

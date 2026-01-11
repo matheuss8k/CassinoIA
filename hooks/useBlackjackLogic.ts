@@ -146,15 +146,22 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
         if (isMounted.current) playSynthSound(type);
     }, []);
 
-    const checkGameUpdates = (data: any) => {
+    const getGameUpdates = (data: any): Partial<User> => {
+        const updates: Partial<User> = {};
         if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
             window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
-            const currentTrophies = user.unlockedTrophies || [];
-            updateUser({ unlockedTrophies: [...new Set([...currentTrophies, ...data.newTrophies])] });
+            updates.unlockedTrophies = [...new Set([...(user.unlockedTrophies || []), ...data.newTrophies])];
         }
         if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
             window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
         }
+        if (data.missions && Array.isArray(data.missions)) {
+            updates.missions = data.missions;
+        }
+        if (data.newBalance !== undefined) updates.balance = data.newBalance;
+        if (data.loyaltyPoints !== undefined) updates.loyaltyPoints = data.loyaltyPoints;
+        
+        return updates;
     };
 
     // --- ACTIONS ---
@@ -237,6 +244,7 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
         setStatus(GameStatus.GameOver);
         setIsProcessing(false);
 
+        // Sync final state safely
         setTimeout(async () => {
             if (!isMounted.current) return;
             try {
@@ -271,7 +279,8 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
             const data: any = await DatabaseService.blackjackDeal(user.id, bet, sideBets);
             if (!isMounted.current) return;
 
-            checkGameUpdates(data);
+            const updates = getGameUpdates(data);
+            updateUser(updates);
             
             setStatus(GameStatus.Dealing);
             setLastBet(bet);
@@ -280,7 +289,6 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
             setAccumulatedWin(data.sideBetWin || 0);
             setIsProcessing(false); 
             if (data.publicSeed) setServerSeedHash(data.publicSeed);
-            updateUser({ balance: data.newBalance, loyaltyPoints: data.loyaltyPoints });
 
             const pHand = data.playerHand;
             const dHand = data.dealerHand;
@@ -333,8 +341,10 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
             const data: any = await DatabaseService.blackjackInsurance(user.id, buy);
             if (!isMounted.current) return;
             setIsProcessing(false);
-            checkGameUpdates(data);
-            if (data.newBalance !== undefined) updateUser({ balance: data.newBalance });
+            
+            const updates = getGameUpdates(data);
+            updateUser(updates);
+
             if (data.insuranceWin) setAccumulatedWin(prev => prev + data.insuranceWin);
             
             if (data.status === 'GAME_OVER') {
@@ -362,10 +372,13 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
             const data = await DatabaseService.blackjackHit(user.id);
             if (!isMounted.current) return;
             setIsProcessing(false);
-            checkGameUpdates(data);
+            
+            const updates = getGameUpdates(data);
+            updateUser(updates);
+
             setPlayerHand(data.playerHand);
             playSound('card');
-            if (data.newBalance !== undefined) updateUser({ balance: data.newBalance, loyaltyPoints: data.loyaltyPoints });
+            
             if (data.status === 'GAME_OVER') {
                  setDealerHand(data.dealerHand);
                  endGame(data.result);
@@ -384,7 +397,11 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
             const data: any = await DatabaseService.blackjackStand(user.id);
             if (!isMounted.current) return;
             setIsProcessing(false);
-            checkGameUpdates(data);
+            
+            const updates = getGameUpdates(data);
+            // Stand returns final balance immediately, so we update here
+            updateUser(updates);
+
             setStatus(GameStatus.DealerTurn);
             if (data.sideBetWin) setAccumulatedWin(prev => prev + data.sideBetWin);
 
@@ -404,7 +421,6 @@ export const useBlackjackLogic = (user: User, updateUser: (data: Partial<User>) 
                       await new Promise(r => setTimeout(r, 400));
                       if (!isMounted.current) return;
                  }
-                 updateUser({ balance: data.newBalance, loyaltyPoints: data.loyaltyPoints });
                  endGame(data.result);
             }
             animateDealerTurn();

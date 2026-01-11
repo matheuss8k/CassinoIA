@@ -135,7 +135,7 @@ const BalanceDisplay = ({ balance, onClick }: { balance: number, onClick: () => 
 };
 
 // --- LAYOUT DA APLICAÇÃO (NAVBAR + CONTENT) ---
-const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, children?: React.ReactNode, onLogout: () => void, onOpenWallet: () => void }) => {
+const AppLayout = ({ user, children, onLogout, onOpenWallet, updateUser }: { user: User, children?: React.ReactNode, onLogout: () => void, onOpenWallet: () => void, updateUser: (u: Partial<User>) => void }) => {
     const location = useLocation();
     const isDashboard = location.pathname === '/';
 
@@ -182,7 +182,7 @@ const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, chi
             </main>
             
             {/* HUD DE MISSÕES GLOBAL */}
-            <MissionsHUD user={user} />
+            <MissionsHUD user={user} updateUser={updateUser} />
         </div>
     );
 };
@@ -192,11 +192,12 @@ interface ProtectedRouteProps {
     user: User | null;
     onLogout: () => void;
     onOpenWallet: () => void;
+    updateUser: (u: Partial<User>) => void;
     children?: React.ReactNode;
 }
-const ProtectedRoute = ({ user, onLogout, onOpenWallet, children }: ProtectedRouteProps) => {
+const ProtectedRoute = ({ user, onLogout, onOpenWallet, updateUser, children }: ProtectedRouteProps) => {
     if (!user) return <Navigate to="/" replace />;
-    return <AppLayout user={user} onLogout={onLogout} onOpenWallet={onOpenWallet}>{children}</AppLayout>;
+    return <AppLayout user={user} onLogout={onLogout} onOpenWallet={onOpenWallet} updateUser={updateUser}>{children}</AppLayout>;
 };
 
 // --- CONTEÚDO PRINCIPAL E ROTAS ---
@@ -331,14 +332,14 @@ const AppContent: React.FC = () => {
     <>
         <AchievementToast />
         <Routes>
-            <Route path="/" element={!user ? <AuthForm onLogin={handleLogin} /> : <ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><Dashboard user={user} updateUser={handleUpdateUser}/></ProtectedRoute>} />
+            <Route path="/" element={!user ? <AuthForm onLogin={handleLogin} /> : <ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)} updateUser={handleUpdateUser}><Dashboard user={user} updateUser={handleUpdateUser}/></ProtectedRoute>} />
             
-            <Route path="/blackjack" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BlackjackGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
-            <Route path="/mines" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><MinesGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
-            <Route path="/tigrinho" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><TigerGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
-            <Route path="/baccarat" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><BaccaratGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/blackjack" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)} updateUser={handleUpdateUser}><BlackjackGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/mines" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)} updateUser={handleUpdateUser}><MinesGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/tigrinho" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)} updateUser={handleUpdateUser}><TigerGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/baccarat" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)} updateUser={handleUpdateUser}><BaccaratGame user={user!} updateUser={handleUpdateUser} /></ProtectedRoute>} />
             
-            <Route path="/profile" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)}><UserProfile user={user!} onUpdateUser={handleUpdateUser} /></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute user={user} onLogout={handleLogout} onOpenWallet={() => setIsWalletOpen(true)} updateUser={handleUpdateUser}><UserProfile user={user!} onUpdateUser={handleUpdateUser} /></ProtectedRoute>} />
             
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

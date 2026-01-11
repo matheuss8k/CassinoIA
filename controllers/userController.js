@@ -1,7 +1,8 @@
 
-const { User, GameSession } = require('../models');
+const mongoose = require('mongoose');
+const { User, GameSession, Transaction } = require('../models');
 const { processTransaction, AchievementSystem, MissionSystem } = require('../engine');
-const { STORE_ITEMS, logEvent } = require('../utils');
+const { STORE_ITEMS, logEvent, generateHash } = require('../utils');
 
 const getBalance = async (req, res) => {
     const { newBalance } = req.body; 
@@ -144,53 +145,108 @@ const purchaseItem = async (req, res) => {
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
-// --- NEW: CLAIM MISSION REWARD ---
+// --- BANKING GRADE CLAIM MISSION ---
+// Atomicidade e Auditoria Completa
 const claimMission = async (req, res) => {
+    let session = null;
     try {
         const { missionId } = req.body;
-        
-        // Atomic Check & Update
-        // Encontra o usuário que tenha a missão com o ID, Completed=true e Claimed!=true
-        // E já atualiza claimed=true e adiciona os pontos
-        const user = await User.findById(req.user.id);
-        if (!user) return res.sendStatus(404);
+        const userId = req.user.id;
 
-        const mission = user.missions.find(m => m.id === missionId);
-        
-        if (!mission) return res.status(404).json({ message: "Missão não encontrada." });
-        if (!mission.completed) return res.status(400).json({ message: "Missão incompleta." });
-        if (mission.claimed) return res.status(400).json({ message: "Recompensa já resgatada." });
+        // 1. Inicia Transação ACID (MongoDB Session)
+        session = await mongoose.startSession();
+        session.startTransaction();
 
-        // Executa a transação atômica
-        // Usamos $inc para os pontos e $set para marcar a missão específica como claimed
-        const result = await User.findOneAndUpdate(
+        // 2. Leitura inicial (dentro da sessão) para validar existência
+        const userCheck = await User.findById(userId).session(session);
+        if (!userCheck) {
+            await session.abortTransaction();
+            return res.sendStatus(404);
+        }
+
+        const missionIndex = userCheck.missions.findIndex(m => String(m.id) === String(missionId));
+        if (missionIndex === -1) {
+            await session.abortTransaction();
+            return res.status(404).json({ message: "Missão não encontrada." });
+        }
+
+        const mission = userCheck.missions[missionIndex];
+
+        // Validações de Regra de Negócio (Redundância de segurança)
+        if (!mission.completed) {
+            await session.abortTransaction();
+            return res.status(400).json({ message: "Missão incompleta." });
+        }
+        if (mission.claimed) {
+            await session.abortTransaction();
+            return res.status(400).json({ message: "Recompensa já resgatada." });
+        }
+
+        const rewardPoints = mission.rewardPoints;
+
+        // 3. Atualização Atômica (Optimistic Locking via Query)
+        // Substitui o user.save() que poderia sobrescrever saldo em condição de corrida.
+        // A condição 'missions.$.claimed: false' garante que só atualiza se ainda não foi clamado.
+        const updatedUser = await User.findOneAndUpdate(
             { 
-                _id: req.user.id, 
-                "missions.id": missionId,
-                "missions.completed": true,
-                "missions.claimed": { $ne: true } // Garante que não foi claimada
+                _id: userId, 
+                missions: { 
+                    $elemMatch: { 
+                        id: missionId, 
+                        completed: true, 
+                        claimed: false 
+                    } 
+                } 
             },
             {
                 $set: { "missions.$.claimed": true },
-                $inc: { loyaltyPoints: mission.rewardPoints }
+                $inc: { loyaltyPoints: rewardPoints }
             },
-            { new: true }
+            { new: true, session }
         );
 
-        if (!result) {
-            return res.status(400).json({ message: "Erro ao processar resgate. Tente novamente." });
+        if (!updatedUser) {
+            // Se falhou aqui, foi Race Condition (já clamado por outro request paralelo)
+            await session.abortTransaction();
+            return res.status(409).json({ message: "Operação conflitante. Tente novamente." });
         }
 
-        logEvent('METRIC', `🎁 Mission Reward Claimed: ${mission.description} (+${mission.rewardPoints}) by ${user.username}`);
+        // 4. Geração de Log Financeiro (Audit Trail)
+        // Insere registro na tabela Transaction para auditoria de pontos.
+        const lastTx = await Transaction.findOne({ userId }).sort({ createdAt: -1 }).session(session).lean();
+        const prevHash = lastTx ? lastTx.integrityHash : 'GENESIS';
+        
+        const txData = { 
+            userId, 
+            type: 'MISSION_REWARD', 
+            currency: 'POINTS', // Campo novo para diferenciar de dinheiro real
+            amount: rewardPoints, 
+            balanceAfter: updatedUser.loyaltyPoints, // Neste contexto, saldo é pontos
+            game: 'MISSION', 
+            referenceId: missionId, 
+            timestamp: new Date().toISOString() 
+        };
+        const integrityHash = generateHash({ ...txData, prevHash });
+
+        await Transaction.create([{ ...txData, integrityHash }], { session });
+
+        // 5. Commit da Transação
+        await session.commitTransaction();
+
+        logEvent('METRIC', `🎁 Mission Reward Claimed: ${mission.description} (+${rewardPoints} pts) by ${updatedUser.username}`);
 
         res.json({ 
             success: true, 
-            newPoints: result.loyaltyPoints, 
-            missions: result.missions 
+            newPoints: updatedUser.loyaltyPoints, 
+            missions: updatedUser.missions 
         });
 
     } catch (e) {
-        res.status(500).json({ message: e.message });
+        if (session) await session.abortTransaction();
+        console.error("Claim Transaction Error:", e);
+        res.status(500).json({ message: "Erro interno seguro ao processar resgate." });
+    } finally {
+        if (session) session.endSession();
     }
 };
 

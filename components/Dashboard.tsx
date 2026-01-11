@@ -20,7 +20,7 @@ interface GameOption {
 
 interface DashboardProps {
     user: User;
-    updateUser: (u: User) => void;
+    updateUser: (u: Partial<User>) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ user, updateUser }) => {
@@ -106,7 +106,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, updateUser }) => {
       setClaiming(true);
       try {
           const result = await DatabaseService.claimMission(user.id, mission.id);
-          if (result.success) window.location.reload(); // Force refresh to show updated points/state
+          if (result.success) {
+              // ATUALIZAÇÃO REATIVA (SEM RELOAD)
+              updateUser({
+                  loyaltyPoints: result.newPoints,
+                  missions: result.missions
+              });
+              window.dispatchEvent(new CustomEvent('mission-claimed', { detail: { points: mission.rewardPoints } }));
+          }
       } catch (e) { console.error(e); } finally { setClaiming(false); }
   };
 
