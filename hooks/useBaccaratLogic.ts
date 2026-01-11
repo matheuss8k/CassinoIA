@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { User, GameStatus, Card } from '../types';
 import { DatabaseService } from '../services/database';
@@ -77,16 +78,43 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
     const [payout, setPayout] = useState(0);
     const [loading, setLoading] = useState(false);
     const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
-    const [serverSeedHash, setServerSeedHash] = useState<string>(''); // Added for Provably Fair
+    const [serverSeedHash, setServerSeedHash] = useState<string>(''); 
 
     const isMounted = useRef(true);
+    const statusRef = useRef(status);
 
     const totalBet = useMemo(() => Object.values(bets).reduce((a: number, b: number) => a + b, 0), [bets]);
 
     useEffect(() => {
         isMounted.current = true;
+        statusRef.current = status;
         return () => { isMounted.current = false; };
+    }, [status]);
+
+    // CLEANUP: Forfeit on unmount if game is mid-deal
+    useEffect(() => {
+        return () => {
+            if (statusRef.current === GameStatus.Dealing || statusRef.current === GameStatus.Playing) {
+                console.log("Abandoning Baccarat game - Forfeiting...");
+                DatabaseService.forfeitGame('BACCARAT').catch(e => console.error("Auto-forfeit failed", e));
+            }
+        };
     }, []);
+
+    // NEW: Generic Checker
+    const checkGameUpdates = (data: any) => {
+        if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
+            window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
+            const currentTrophies = user.unlockedTrophies || [];
+            updateUser({ unlockedTrophies: [...new Set([...currentTrophies, ...data.newTrophies])] });
+        }
+        if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
+            window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
+        }
+        if (data.missions && Array.isArray(data.missions)) {
+            updateUser({ missions: data.missions });
+        }
+    };
 
     const placeBet = (type: BaccaratBetType) => {
         if (status !== GameStatus.Idle) return;
@@ -132,15 +160,16 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
             const data: any = await DatabaseService.baccaratDeal(user.id, bets);
             if (!isMounted.current) return;
 
+            // ATUALIZADO: Verificação de Missões/Conquistas
+            checkGameUpdates(data);
+
             setLoading(false);
             setStatus(GameStatus.Dealing);
             setGameState({ pHand: [], bHand: [], pScore: 0, bScore: 0, winner: null });
             
-            // Set Public Hash for Provably Fair immediately
-            if (data.publicSeed) { // Assuming backend sends publicSeed in the response
+            if (data.publicSeed) {
                  setServerSeedHash(data.publicSeed);
             } else if (data.serverSeed) {
-                 // Fallback if backend sends raw seed (should not happen in prod, but safe handle)
                  setServerSeedHash("Hash Protegido"); 
             }
 
@@ -155,15 +184,22 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
             playSound('card');
             setGameState(prev => ({ ...prev, pHand: [finalPHand[0]] }));
             await delay(600);
+            if(!isMounted.current) return;
+
             playSound('card');
             setGameState(prev => ({ ...prev, bHand: [finalBHand[0]] }));
             await delay(600);
+            if(!isMounted.current) return;
+
             playSound('card');
             setGameState(prev => ({ ...prev, pHand: [finalPHand[0], finalPHand[1]] }));
             await delay(600);
+            if(!isMounted.current) return;
+
             playSound('card');
             setGameState(prev => ({ ...prev, bHand: [finalBHand[0], finalBHand[1]] }));
             await delay(800);
+            if(!isMounted.current) return;
 
             // Third Card Player
             if (finalPHand.length > 2) {
@@ -171,6 +207,7 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
                 setGameState(prev => ({ ...prev, pHand: finalPHand }));
                 await delay(800);
             }
+            if(!isMounted.current) return;
 
             // Third Card Banker
             if (finalBHand.length > 2) {
@@ -178,6 +215,7 @@ export const useBaccaratLogic = (user: User, updateUser: (data: Partial<User>) =
                 setGameState(prev => ({ ...prev, bHand: finalBHand }));
                 await delay(800);
             }
+            if(!isMounted.current) return;
 
             setGameState({
                 pHand: finalPHand,

@@ -4,6 +4,7 @@ const { User, GameSession } = require('../../models');
 const { processTransaction, saveGameLog, GameStateHelper } = require('../modules/TransactionManager');
 const { calculateRisk } = require('../modules/RiskEngine');
 const { AchievementSystem } = require('../modules/AchievementSystem');
+const { MissionSystem } = require('../modules/MissionSystem'); 
 const { secureShuffle, secureRandomFloat, generateSeed, logGameResult } = require('../../utils');
 
 // Helper to calculate hand score
@@ -21,7 +22,6 @@ const getRoiString = (user, currentBet, currentPayout) => {
     if (user.totalDeposits > 0) {
         return (((user.balance - user.totalDeposits) / user.totalDeposits) * 100).toFixed(2) + '%';
     } else {
-        // Test Account Logic: Yield based (Win / Wagered)
         const totalWagered = (user.stats?.totalWagered || 0) + currentBet;
         const totalWon = (user.stats?.totalWonAmount || 0) + currentPayout;
         if (totalWagered > 0) {
@@ -34,8 +34,9 @@ const getRoiString = (user, currentBet, currentPayout) => {
 
 // --- DEAL ---
 const deal = async (userId, amount, sideBets) => {
+    if (amount < 1) throw new Error("Aposta mínima é R$ 1.00");
+
     const totalBet = amount + (sideBets?.perfectPairs || 0) + (sideBets?.dealerBust || 0);
-    // Parallel Fetch
     const [userFetch, existingSession] = await Promise.all([
         User.findById(userId),
         GameSession.findOne({ userId })
@@ -43,6 +44,11 @@ const deal = async (userId, amount, sideBets) => {
 
     if (!userFetch) throw new Error("User not found");
     if (existingSession) throw new Error("Jogo já em andamento. Recarregue a página.");
+
+    // Mission Trigger: Betting
+    const missionBetResult = await MissionSystem.updateProgress(userId, { type: 'BET', amount: totalBet });
+    let completedMissions = missionBetResult.completedMissions || [];
+    let currentAllMissions = missionBetResult.allMissions || []; // Capture latest state
 
     const risk = calculateRisk(userFetch, totalBet);
     let engineAdjustment = null;
@@ -54,7 +60,7 @@ const deal = async (userId, amount, sideBets) => {
     let pHand=[deck.pop(),deck.pop()]; 
     let dHand=[deck.pop(),deck.pop()];
 
-    // RIGGED DEAL (High Risk)
+    // RIGGED DEAL (High Risk Logic Preserved)
     if ((risk.level === 'HIGH' || risk.level === 'EXTREME')) {
         if (dHand[0].value <= 9 && dHand[1].value <= 9) {
             const powerCard = deck.find(c => c.value === 10 || c.value === 11);
@@ -98,9 +104,27 @@ const deal = async (userId, amount, sideBets) => {
 
     if (status === 'GAME_OVER') {
          user = await processTransaction(userId, -totalBet, 'BET', 'BLACKJACK', null, null); 
-         if (payout > 0) user = await processTransaction(userId, payout, 'WIN', 'BLACKJACK');
+         if (payout > 0) {
+             user = await processTransaction(userId, payout, 'WIN', 'BLACKJACK');
+             
+             // Mission Trigger: Win
+             const m1 = await MissionSystem.updateProgress(userId, { type: 'WIN', amount: payout - totalBet });
+             let m2 = { completedMissions: [] }, m3 = { completedMissions: [] };
+
+             if (result === 'BLACKJACK') {
+                 m2 = await MissionSystem.updateProgress(userId, { gameEvent: 'BLACKJACK_NATURAL', value: 1 });
+                 m3 = await MissionSystem.updateProgress(userId, { gameEvent: 'BLACKJACK_WIN', value: 1 });
+             } else if (result !== 'PUSH') {
+                 m3 = await MissionSystem.updateProgress(userId, { gameEvent: 'BLACKJACK_WIN', value: 1 });
+             }
+             
+             completedMissions = [...completedMissions, ...m1.completedMissions, ...m2.completedMissions, ...m3.completedMissions];
+             // Merge latest mission state if available
+             if (m3.allMissions) currentAllMissions = m3.allMissions;
+             else if (m2.allMissions) currentAllMissions = m2.allMissions;
+             else if (m1.allMissions) currentAllMissions = m1.allMissions;
+         }
          
-         // Async Log
          const currentRoi = getRoiString(user, totalBet, payout);
          logGameResult('BLACKJACK', user.username, payout - totalBet, user.sessionProfit, risk.level, engineAdjustment, currentRoi);
          
@@ -116,12 +140,11 @@ const deal = async (userId, amount, sideBets) => {
          user = await processTransaction(userId, -totalBet, 'BET', 'BLACKJACK', null, gameState);
     }
     
-    return { playerHand: pHand, dealerHand: status!=='GAME_OVER'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: user.balance, sideBetWin: 0, publicSeed, newTrophies };
+    return { playerHand: pHand, dealerHand: status!=='GAME_OVER'?[dHand[0],{...dHand[1],isHidden:true}]:dHand, status, result, newBalance: user.balance, sideBetWin: 0, publicSeed, newTrophies, completedMissions, missions: currentAllMissions };
 };
 
 // --- HIT ---
 const hit = async (userId) => {
-    // Parallel fetch not needed here since we mostly need session
     const session = await GameSession.findOne({ userId }).select('+bjDeck');
     if (!session || session.type !== 'BLACKJACK') throw new Error("Jogo não encontrado ou expirado.");
     
@@ -131,6 +154,7 @@ const hit = async (userId) => {
     let nextCard = g.bjDeck.pop();
     let engineAdjustment = null;
 
+    // RIGGED HIT (Risk Logic Preserved)
     if (g.riskLevel === 'HIGH' || g.riskLevel === 'EXTREME') {
         const sc = calc(g.bjPlayerHand);
         if (sc >= 12) {
@@ -148,7 +172,6 @@ const hit = async (userId) => {
     let status = 'PLAYING', result = 'NONE';
     let newTrophies = [];
     
-    // Check Bust
     if (calc(g.bjPlayerHand) > 21) {
         status = 'GAME_OVER'; result = 'BUST';
         
@@ -159,23 +182,14 @@ const hit = async (userId) => {
         
         const currentRoi = getRoiString(user, g.bet, 0);
         logGameResult('BLACKJACK', user.username, -g.bet, 0, g.riskLevel, engineAdjustment, currentRoi);
-        
         saveGameLog(userId, 'BLACKJACK', g.bet, 0, { result: 'BUST' }, g.riskLevel, engineAdjustment).catch(console.error);
         
         newTrophies = await AchievementSystem.check(userId, { game: 'BLACKJACK', bet: g.bet, payout: 0 });
     } else {
-        // Just update hand in session, no user update needed (balance unchanged)
         await GameSession.updateOne({ userId }, { bjPlayerHand: g.bjPlayerHand, bjDeck: g.bjDeck, updatedAt: new Date() });
     }
     
-    return { 
-        playerHand: g.bjPlayerHand, 
-        dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], 
-        status, 
-        result, 
-        newBalance: user.balance, // Return cached balance (unchanged on hit)
-        newTrophies 
-    };
+    return { playerHand: g.bjPlayerHand, dealerHand: [g.bjDealerHand[0],{...g.bjDealerHand[1],isHidden:true}], status, result, newBalance: user.balance, newTrophies, completedMissions: [] };
 };
 
 // --- STAND ---
@@ -191,7 +205,7 @@ const stand = async (userId) => {
     let dScore = calc(g.bjDealerHand); const pScore = calc(g.bjPlayerHand);
     let engineAdjustment = null;
 
-    // SWEATY DEALER
+    // RIGGED STAND (Risk Logic Preserved)
     if ((g.riskLevel === 'HIGH' || g.riskLevel === 'EXTREME') && pScore <= 21) {
         const sweatyCards = g.bjDeck.filter(c => c.value >= 2 && c.value <= 5);
         const otherCards = g.bjDeck.filter(c => c.value < 2 || c.value > 5);
@@ -210,12 +224,23 @@ const stand = async (userId) => {
     else if (pScore === dScore) { result = 'PUSH'; payout = g.bet; }
 
     let processedUser;
-    // Clear Session first
     await GameSession.deleteOne({ userId });
+    let completedMissions = [];
+    let currentAllMissions = [];
 
     if (payout > 0) {
         processedUser = await processTransaction(userId, payout, 'WIN', 'BLACKJACK');
         await User.updateOne({ _id: userId }, { lastBetResult: 'WIN', previousBet: g.bet, $unset: { activeGame: "" }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } });
+        
+        // Mission Trigger: Win
+        const m1 = await MissionSystem.updateProgress(userId, { type: 'WIN', amount: payout - g.bet });
+        let m2 = { completedMissions: [] };
+        if (result === 'WIN') {
+            m2 = await MissionSystem.updateProgress(userId, { gameEvent: 'BLACKJACK_WIN', value: 1 });
+        }
+        completedMissions = [...m1.completedMissions, ...m2.completedMissions];
+        if (m2.allMissions) currentAllMissions = m2.allMissions;
+        else if (m1.allMissions) currentAllMissions = m1.allMissions;
     } else {
         processedUser = await User.findById(userId); 
         await User.updateOne({ _id: userId }, { lastBetResult: 'LOSS', previousBet: g.bet, $unset: { activeGame: "" }, $inc: { consecutiveLosses: 1 }, $set: { consecutiveWins: 0 } });
@@ -223,44 +248,46 @@ const stand = async (userId) => {
     
     const currentRoi = getRoiString(processedUser, g.bet, payout);
     logGameResult('BLACKJACK', user.username, payout - g.bet, 0, g.riskLevel, engineAdjustment, currentRoi);
-    
     saveGameLog(userId, 'BLACKJACK', g.bet, payout, { dScore, pScore, result }, g.riskLevel, engineAdjustment, processedUser.lastTransactionId).catch(console.error);
     
     const newTrophies = await AchievementSystem.check(userId, { 
         game: 'BLACKJACK', bet: g.bet, payout, extra: { isBlackjack: false, previousLosses: prevLosses, lossStreakBroken: payout > 0 } 
     });
     
-    return { dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: processedUser.balance, newTrophies };
+    return { dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: processedUser.balance, newTrophies, completedMissions, missions: currentAllMissions };
 };
 
 // --- INSURANCE ---
-const insurance = async (userId, buyInsurance) => {
+const insurance = async (userId, buy) => {
     const session = await GameSession.findOne({ userId }).select('+bjDeck');
-    if (!session || session.type !== 'BLACKJACK' || session.bjStatus !== 'INSURANCE') throw new Error('Ação inválida ou jogo expirado.');
+    if (!session || session.type !== 'BLACKJACK' || session.bjStatus !== 'INSURANCE') throw new Error('Ação inválida.');
     
     const user = await User.findById(userId);
     let g = session.toObject();
-
     const insuranceCost = g.bet * 0.5;
     
-    if (buyInsurance) {
+    let completedMissions = [];
+    let currentAllMissions = [];
+
+    if (buy) {
         if (user.balance < insuranceCost) throw new Error('Saldo insuficiente');
         await processTransaction(userId, -insuranceCost, 'BET', 'BLACKJACK_INSURANCE');
         g.insuranceBet = insuranceCost;
+        const m = await MissionSystem.updateProgress(userId, { type: 'BET', amount: insuranceCost });
+        completedMissions = [...m.completedMissions];
+        if (m.allMissions) currentAllMissions = m.allMissions;
     }
 
+    // RIGGED INSURANCE LOGIC PRESERVED
     let hiddenCard = g.bjDealerHand[1];
     let engineAdjustment = null;
-
-    if (buyInsurance) {
-        if (hiddenCard.value === 10) {
-            const nonTenIdx = g.bjDeck.findIndex(c => c.value !== 10);
-            if (nonTenIdx !== -1) {
-                const nonTen = g.bjDeck.splice(nonTenIdx, 1)[0];
-                g.bjDeck.push(hiddenCard);
-                g.bjDealerHand[1] = nonTen; 
-                engineAdjustment = 'INSURANCE_SCAM_SAFE';
-            }
+    if (buy && hiddenCard.value === 10) {
+        const nonTenIdx = g.bjDeck.findIndex(c => c.value !== 10);
+        if (nonTenIdx !== -1) {
+            const nonTen = g.bjDeck.splice(nonTenIdx, 1)[0];
+            g.bjDeck.push(hiddenCard);
+            g.bjDealerHand[1] = nonTen; 
+            engineAdjustment = 'INSURANCE_SCAM_SAFE';
         }
     }
 
@@ -271,23 +298,23 @@ const insurance = async (userId, buyInsurance) => {
     };
     const dealerHasBJ = checkDealerBJ(g.bjDealerHand);
     
-    let insuranceWin = 0;
-    let mainResult = 'NONE';
-    let mainPayout = 0;
+    let insuranceWin = 0, mainResult = 'NONE', mainPayout = 0;
 
     if (dealerHasBJ) {
         g.bjStatus = 'GAME_OVER';
         g.bjDealerHand[1].isHidden = false; 
 
-        if (buyInsurance) {
+        if (buy) {
             insuranceWin = g.insuranceBet * 3;
             await processTransaction(userId, insuranceWin, 'WIN', 'BLACKJACK_INSURANCE_WIN');
+            const m = await MissionSystem.updateProgress(userId, { type: 'WIN', amount: insuranceWin - g.insuranceBet });
+            completedMissions = [...completedMissions, ...m.completedMissions];
+            if (m.allMissions) currentAllMissions = m.allMissions;
         }
 
         const playerHasBJ = calc(g.bjPlayerHand) === 21;
         if (playerHasBJ) {
-            mainResult = 'PUSH';
-            mainPayout = g.bet;
+            mainResult = 'PUSH'; mainPayout = g.bet;
             await processTransaction(userId, mainPayout, 'REFUND', 'BLACKJACK');
         } else {
             mainResult = 'LOSE';
@@ -299,10 +326,8 @@ const insurance = async (userId, buyInsurance) => {
         ]);
         
         const finalUser = await User.findById(userId);
-        const currentRoi = getRoiString(finalUser, g.bet + g.insuranceBet, mainPayout + insuranceWin);
-        logGameResult('BLACKJACK', user.username, (mainPayout + insuranceWin) - (g.bet + g.insuranceBet), 0, g.riskLevel, engineAdjustment, currentRoi);
-
-        saveGameLog(userId, 'BLACKJACK', g.bet, mainPayout + (buyInsurance ? insuranceWin : 0), { result: 'DEALER_BJ', insurance: buyInsurance }, g.riskLevel, engineAdjustment).catch(console.error);
+        saveGameLog(userId, 'BLACKJACK', g.bet, mainPayout + (buy ? insuranceWin : 0), { result: 'DEALER_BJ', insurance: buy }, g.riskLevel, engineAdjustment).catch(console.error);
+        return { status: 'GAME_OVER', dealerHand: g.bjDealerHand, playerHand: g.bjPlayerHand, result: mainResult, insuranceWin: insuranceWin > 0 ? (insuranceWin - g.insuranceBet) : 0, newBalance: finalUser.balance, completedMissions, missions: currentAllMissions };
 
     } else {
         g.bjStatus = 'PLAYING';
@@ -313,36 +338,27 @@ const insurance = async (userId, buyInsurance) => {
             mainPayout = g.bet * 2.5; 
             await processTransaction(userId, mainPayout, 'WIN', 'BLACKJACK');
             
+            const m1 = await MissionSystem.updateProgress(userId, { type: 'WIN', amount: mainPayout - g.bet });
+            const m2 = await MissionSystem.updateProgress(userId, { gameEvent: 'BLACKJACK_WIN', value: 1 });
+            const m3 = await MissionSystem.updateProgress(userId, { gameEvent: 'BLACKJACK_NATURAL', value: 1 });
+            completedMissions = [...completedMissions, ...m1.completedMissions, ...m2.completedMissions, ...m3.completedMissions];
+            if (m3.allMissions) currentAllMissions = m3.allMissions;
+            else if (m1.allMissions) currentAllMissions = m1.allMissions;
+            
             await Promise.all([
                 GameSession.deleteOne({ userId }),
                 User.updateOne({ _id: userId }, { lastBetResult: 'WIN', $unset: { activeGame: "" }, $inc: { consecutiveWins: 1 }, $set: { consecutiveLosses: 0 } })
             ]);
             
             const finalUser = await User.findById(userId);
-            const currentRoi = getRoiString(finalUser, g.bet, mainPayout);
-            logGameResult('BLACKJACK', user.username, mainPayout - g.bet, 0, g.riskLevel, engineAdjustment, currentRoi);
-
             saveGameLog(userId, 'BLACKJACK', g.bet, mainPayout, { result: 'BLACKJACK' }, g.riskLevel, engineAdjustment).catch(console.error);
+            return { status: 'GAME_OVER', dealerHand: g.bjDealerHand, playerHand: g.bjPlayerHand, result: mainResult, insuranceWin: 0, newBalance: finalUser.balance, completedMissions, missions: currentAllMissions };
         } else {
-            await GameSession.updateOne({ userId }, { 
-                bjDeck: g.bjDeck, 
-                bjDealerHand: g.bjDealerHand, 
-                bjStatus: 'PLAYING', 
-                insuranceBet: g.insuranceBet,
-                updatedAt: new Date()
-            });
+            await GameSession.updateOne({ userId }, { bjDeck: g.bjDeck, bjDealerHand: g.bjDealerHand, bjStatus: 'PLAYING', insuranceBet: g.insuranceBet, updatedAt: new Date() });
+            const finalUser = await User.findById(userId);
+            return { status: 'PLAYING', dealerHand: [g.bjDealerHand[0], { ...g.bjDealerHand[1], isHidden: true }], playerHand: g.bjPlayerHand, result: 'NONE', insuranceWin: 0, newBalance: finalUser.balance, completedMissions, missions: currentAllMissions };
         }
     }
-
-    const finalUser = await User.findById(userId);
-    return {
-        status: g.bjStatus,
-        dealerHand: g.bjStatus === 'GAME_OVER' ? g.bjDealerHand : [g.bjDealerHand[0], { ...g.bjDealerHand[1], isHidden: true }],
-        playerHand: g.bjPlayerHand,
-        result: mainResult,
-        insuranceWin: insuranceWin > 0 ? (insuranceWin - g.insuranceBet) : 0, 
-        newBalance: finalUser.balance
-    };
 };
 
 module.exports = { deal, hit, stand, insurance };

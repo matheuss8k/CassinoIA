@@ -27,10 +27,9 @@ const getMinesMultiplierPreview = (minesCount: number, nextRevealedCount: number
         if (nextRevealedCount <= 0) return 1.0;
         const index = nextRevealedCount - 1;
         if (index < MINES_MULTIPLIERS[minesCount].length) {
-            return MINES_MULTIPLIERS[minesCount][index];
+            return MINES_MULTIPLIERS[minesCount].length > 0 ? MINES_MULTIPLIERS[minesCount][index] : 1.0;
         }
     }
-    // Fallback calculation logic
     let multiplier = 1.0;
     const houseEdge = 0.97;
     for (let i = 0; i < nextRevealedCount; i++) {
@@ -101,6 +100,7 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
     const gameOverTimeoutRef = useRef<number | null>(null);
     const isMounted = useRef(true);
     const hasRestored = useRef(false);
+    const statusRef = useRef(status); // Ref to track status for unmount cleanup
 
     // --- COMPUTED ---
     const nextMultiplierPreview = useMemo(() => 
@@ -117,17 +117,36 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
     // --- LIFECYCLE ---
     useEffect(() => {
         isMounted.current = true;
+        statusRef.current = status; // Keep ref sync for unmount check
         return () => { 
             isMounted.current = false; 
             if (gameOverTimeoutRef.current) clearTimeout(gameOverTimeoutRef.current);
         };
+    }, [status]);
+
+    // --- CLEANUP ON UNMOUNT (AUTO FORFEIT) ---
+    useEffect(() => {
+        return () => {
+            // Se o usuário sair da página enquanto o jogo estiver RODANDO, perde a aposta (Forfeit)
+            if (statusRef.current === GameStatus.Playing) {
+                console.log("Abandoning Mines game - Forfeiting...");
+                DatabaseService.forfeitGame('MINES').catch(e => console.error("Auto-forfeit failed", e));
+            }
+        };
     }, []);
 
-    // Helper: Achievements
-    const checkAchievements = (data: any) => {
+    // Helper: Game Updates (Achievements & Missions)
+    const checkGameUpdates = (data: any) => {
         if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
             window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
             updateUser({ unlockedTrophies: [...new Set([...(user.unlockedTrophies || []), ...data.newTrophies])] });
+        }
+        if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
+            window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
+        }
+        // Critical Fix: Update local user state with the latest mission list from backend
+        if (data.missions && Array.isArray(data.missions)) {
+            updateUser({ missions: data.missions });
         }
     };
 
@@ -243,6 +262,8 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
             const response: any = await DatabaseService.minesStart(user.id, bet, mineCount);
             if(!isMounted.current) return;
 
+            checkGameUpdates(response);
+
             setStatus(GameStatus.Playing);
             updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
             if (response.publicSeed) setServerSeedHash(response.publicSeed);
@@ -268,7 +289,7 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
         try {
             const result = await DatabaseService.minesReveal(user.id, index);
             if(!isMounted.current) return;
-            checkAchievements(result);
+            checkGameUpdates(result);
 
             const newGrid = [...grid];
             newGrid[index].isRevealed = true;
@@ -334,7 +355,7 @@ export const useMinesLogic = (user: User, updateUser: (data: Partial<User>) => v
         try {
             const result = await DatabaseService.minesCashout(user.id);
             if(!isMounted.current) return;
-            checkAchievements(result);
+            checkGameUpdates(result);
             updateUser({ balance: result.newBalance, loyaltyPoints: result.loyaltyPoints });
             playSound('cashout');
             

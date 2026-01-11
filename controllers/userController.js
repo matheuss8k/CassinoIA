@@ -1,6 +1,6 @@
 
 const { User, GameSession } = require('../models');
-const { processTransaction, AchievementSystem } = require('../engine');
+const { processTransaction, AchievementSystem, MissionSystem } = require('../engine');
 const { STORE_ITEMS } = require('../utils');
 
 const getBalance = async (req, res) => {
@@ -18,8 +18,6 @@ const getBalance = async (req, res) => {
         // CHECK DEPOSIT ACHIEVEMENTS
         if (type === 'DEPOSIT') {
             const newTrophies = await AchievementSystem.check(user._id, { game: 'DEPOSIT', amount: diff });
-            // Se houver troféus, o frontend os pegará na próxima sincronização ou via websocket (se houvesse)
-            // Aqui apenas garantimos que o banco foi atualizado.
         }
 
         res.json({ success: true });
@@ -29,14 +27,24 @@ const getBalance = async (req, res) => {
 const syncUser = async (req, res) => {
     // PERFORMANCE AGGREGATION (BFF Pattern)
     // Fetch User and Session in parallel for speed
-    const [user, session] = await Promise.all([
-        User.findById(req.user.id).lean(),
+    const [userFetch, session] = await Promise.all([
+        User.findById(req.user.id),
         GameSession.findOne({ userId: req.user.id }).lean()
     ]);
 
-    if (!user) return res.sendStatus(404);
+    if (!userFetch) return res.sendStatus(404);
+
+    // --- MISSION DAILY CHECK ---
+    // A função ensureDailySync agora retorna as missões atualizadas
+    // Precisamos atribuir isso ao objeto userFetch antes de enviá-lo ao frontend
+    const syncedMissions = await MissionSystem.ensureDailySync(userFetch);
     
     // Normalize User Object
+    const user = userFetch.toObject ? userFetch.toObject() : userFetch;
+    
+    // Garante que o frontend receba a versão mais recente das missões (pós-reset, se houve)
+    user.missions = syncedMissions;
+    
     user.id = user._id;
     delete user._id;
     delete user.__v;
@@ -130,8 +138,6 @@ const purchaseItem = async (req, res) => {
         
         user.loyaltyPoints -= cost; 
         user.ownedItems.push(itemId);
-        
-        // Auto-equip if requested or if logic dictates (omitted for now, user equips manually)
         
         await user.save();
         

@@ -142,11 +142,17 @@ export const useTigerLogic = (user: User, updateUser: (data: Partial<User>) => v
     }, []);
 
     // --- HELPERS ---
-    const checkAchievements = (data: any) => {
+    const checkGameUpdates = (data: any) => {
         if (data.newTrophies && Array.isArray(data.newTrophies) && data.newTrophies.length > 0) {
             window.dispatchEvent(new CustomEvent('achievement-unlocked', { detail: data.newTrophies }));
             const currentTrophies = user.unlockedTrophies || [];
             updateUser({ unlockedTrophies: [...new Set([...currentTrophies, ...data.newTrophies])] });
+        }
+        if (data.completedMissions && Array.isArray(data.completedMissions) && data.completedMissions.length > 0) {
+            window.dispatchEvent(new CustomEvent('mission-completed', { detail: data.completedMissions }));
+        }
+        if (data.missions && Array.isArray(data.missions)) {
+            updateUser({ missions: data.missions });
         }
     };
 
@@ -259,7 +265,8 @@ export const useTigerLogic = (user: User, updateUser: (data: Partial<User>) => v
             setGrid(response.grid);
             if (response.publicSeed) setServerSeedHash(response.publicSeed);
             
-            checkAchievements(response);
+            // ATUALIZADO: Usando checkGameUpdates para verificar Conquistas E Missões
+            checkGameUpdates(response);
 
             updateUser({ balance: response.newBalance, loyaltyPoints: response.loyaltyPoints });
             playSound('stop');

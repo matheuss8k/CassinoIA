@@ -32,12 +32,16 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
     if (!options.credentials) options.credentials = 'include';
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
-    options.signal = controller.signal;
+    // Se keepalive estiver true, não podemos usar AbortSignal com timeout curto padrão
+    let timeoutId: any;
+    if (!options.keepalive) {
+        timeoutId = setTimeout(() => controller.abort(), 15000);
+        options.signal = controller.signal;
+    }
 
     try {
         let response = await fetch(url, options);
-        clearTimeout(timeoutId); 
+        if (timeoutId) clearTimeout(timeoutId); 
 
         // DETECÇÃO DE SESSÃO DERRUBADA (Single Session)
         if (response.status === 403) {
@@ -87,13 +91,13 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, ba
         }
         return response;
     } catch (error: any) {
-        clearTimeout(timeoutId);
+        if (timeoutId) clearTimeout(timeoutId);
         if (error.name === 'AbortError') {
             throw new Error("Tempo limite excedido. Verifique sua conexão.");
         }
         if (error.message.includes("Sessão expirada") || error.message.includes("Sessão encerrada")) throw error;
         
-        if (retries > 0) {
+        if (retries > 0 && !options.keepalive) {
             await new Promise(resolve => setTimeout(resolve, backoff));
             return fetchWithRetry(url, options, retries - 1, backoff * 1.5);
         }
@@ -211,8 +215,16 @@ export const DatabaseService = {
   },
 
   // --- FUNÇÃO PARA FORFEIT (PUNIÇÃO POR ABANDONO) ---
+  // keepalive: true garante que o browser envie a request mesmo se a aba fechar ou mudar de página
   forfeitGame: async (gameType: 'BLACKJACK' | 'MINES' | 'TIGER' | 'BACCARAT') => {
-      const response = await fetchWithRetry(`${API_URL}/game/forfeit`, { method: 'POST', body: JSON.stringify({ game: gameType }) });
+      const response = await fetchWithRetry(
+          `${API_URL}/game/forfeit`, 
+          { 
+              method: 'POST', 
+              body: JSON.stringify({ game: gameType }),
+              keepalive: true 
+          }
+      );
       return handleResponse(response);
   },
 

@@ -11,10 +11,17 @@ const forfeitGame = async (req, res) => {
         if (user.activeGame && user.activeGame.type !== 'NONE') {
             await saveGameLog(user._id, user.activeGame.type, user.activeGame.bet, 0, { result: 'FORFEIT' }, 'NORMAL', 'TIMEOUT');
             await User.updateOne({ _id: user._id }, { $set: { activeGame: { type: 'NONE' }, lastBetResult: 'LOSS' } });
-            AchievementSystem.check(user._id, { game: user.activeGame.type, bet: user.activeGame.bet, payout: 0 });
+            
+            // Safe call to Achievement System
+            if (AchievementSystem && typeof AchievementSystem.check === 'function') {
+                AchievementSystem.check(user._id, { game: user.activeGame.type, bet: user.activeGame.bet, payout: 0 });
+            }
         }
         res.json({ success: true, newBalance: user.balance });
-    } catch(e) { res.status(500).json({ message: e.message }); }
+    } catch(e) { 
+        console.error("Forfeit Error:", e);
+        res.status(500).json({ message: e.message }); 
+    }
 };
 
 // --- BACCARAT ---

@@ -23,12 +23,9 @@ const gameSessionSchema = new mongoose.Schema({
     minesMultiplier: { type: Number, default: 1.0 },
     minesGameOver: { type: Boolean, default: false },
     
-    // Tiger Specifics (Simpler state)
-    // ...Tiger geralmente resolve num único request, mas mantemos estrutura para consistência
-    
     riskLevel: { type: String, default: 'NORMAL' },
     serverSeed: { type: String }, 
-    updatedAt: { type: Date, default: Date.now, expires: 86400 } // Auto-delete após 24h de inatividade (Cleanup de sessões órfãs)
+    updatedAt: { type: Date, default: Date.now, expires: 86400 } // Auto-delete após 24h de inatividade
 });
 
 const userSchema = new mongoose.Schema({
@@ -54,7 +51,7 @@ const userSchema = new mongoose.Schema({
   
   // Profile
   avatarId: { type: String, default: '1' },
-  frameId: { type: String, default: 'frame_1' }, // Default basic frame
+  frameId: { type: String, default: 'frame_1' }, 
   isVerified: { type: Boolean, default: false },
   documentsStatus: { type: String, default: 'NONE' },
   vipLevel: { type: Number, default: 0 },
@@ -62,9 +59,10 @@ const userSchema = new mongoose.Schema({
   // Gamification
   loyaltyPoints: { type: Number, default: 0 },
   missions: { type: Array, default: [] },
+  lastDailyReset: { type: String, default: '' }, // CORREÇÃO CRÍTICA: Campo adicionado para persistir a data
   unlockedTrophies: { type: [String], default: [] },
   ownedItems: { type: [String], default: [] }, 
-  favorites: { type: [String], default: [] }, // NEW: Favorites Persistence
+  favorites: { type: [String], default: [] }, 
   
   // Stats
   stats: {
@@ -73,9 +71,8 @@ const userSchema = new mongoose.Schema({
       totalBlackjacks: { type: Number, default: 0 },
       highestWin: { type: Number, default: 0 },
       totalWagered: { type: Number, default: 0 },
-      totalWonAmount: { type: Number, default: 0 } // New: Required for Test Account ROI
+      totalWonAmount: { type: Number, default: 0 }
   }
-  // activeGame removido daqui para reduzir payload
 }, { timestamps: true });
 
 // --- TRANSACTION SCHEMA ---
@@ -105,7 +102,6 @@ const gameLogSchema = new mongoose.Schema({
     engineAdjustment: { type: String }
 }, { timestamps: true });
 
-// TTL: Logs são deletados automaticamente após 90 dias
 gameLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 
 // --- ACTION LOCK SCHEMA (Mutex) ---

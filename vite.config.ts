@@ -9,7 +9,7 @@ export default defineConfig({
     host: '0.0.0.0', // Permite acesso via IP da rede (ex: 192.168.x.x)
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://127.0.0.1:3000', // Correção: Use IP explícito em vez de localhost
         changeOrigin: true,
         secure: false,
       },

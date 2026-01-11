@@ -1,12 +1,13 @@
 
 // --- ENGINE AGGREGATOR ---
-// This file re-exports all modules for easy import.
 
+// Core Modules
 const { calculateRisk } = require('./modules/RiskEngine');
 const { processTransaction, saveGameLog, GameStateHelper, statsBatcher } = require('./modules/TransactionManager');
 const { AchievementSystem } = require('./modules/AchievementSystem');
+const { MissionSystem } = require('./modules/MissionSystem');
 
-// Games (Optional: Controllers can import directly if preferred to reduce bundle, but kept here for legacy support)
+// Games
 const BlackjackEngine = require('./games/BlackjackEngine');
 const BaccaratEngine = require('./games/BaccaratEngine');
 const MinesEngine = require('./games/MinesEngine');
@@ -19,6 +20,7 @@ module.exports = {
     saveGameLog,
     GameStateHelper,
     AchievementSystem,
+    MissionSystem,
     statsBatcher,
 
     // Game Engines

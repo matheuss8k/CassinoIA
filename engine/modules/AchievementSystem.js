@@ -3,11 +3,11 @@ const { User } = require('../../models');
 const { logEvent } = require('../../utils');
 const { statsBatcher } = require('./TransactionManager');
 
-const AchievementSystem = {
-    check: async (userId, gameContext) => {
+class AchievementSystem {
+    static async check(userId, gameContext) {
         try {
             const user = await User.findById(userId);
-            if (!user) return;
+            if (!user) return [];
 
             const unlockedNow = [];
             const currentTrophies = user.unlockedTrophies || [];
@@ -58,7 +58,6 @@ const AchievementSystem = {
                 }
 
                 // BACCARAT SPECIFIC
-                // Simplificado: Apenas 5 vitórias seguidas no Baccarat
                 if (gameContext.game === 'BACCARAT' && isWin) {
                     if ((user.consecutiveWins || 0) >= 5) unlock('bacc_king');
                 }
@@ -67,12 +66,15 @@ const AchievementSystem = {
                 const statsIncrements = {
                     'stats.totalGames': 1,
                     'stats.totalWagered': gameContext.bet,
-                    'stats.totalWonAmount': gameContext.payout, // UPDATED: Track payouts for ROI calc
+                    'stats.totalWonAmount': gameContext.payout,
                     'stats.totalWins': isWin ? 1 : 0,
                     'stats.totalBlackjacks': (gameContext.game === 'BLACKJACK' && gameContext.extra?.isBlackjack) ? 1 : 0
                 };
                 
-                statsBatcher.add(userId, statsIncrements);
+                // Safety check for statsBatcher
+                if (statsBatcher && typeof statsBatcher.add === 'function') {
+                    statsBatcher.add(userId, statsIncrements);
+                }
 
                 // High score update
                 if (profit > (user.stats?.highestWin || 0)) {
@@ -90,8 +92,9 @@ const AchievementSystem = {
 
         } catch (e) {
             console.error("Achievement Check Error:", e);
+            return [];
         }
     }
-};
+}
 
 module.exports = { AchievementSystem };
