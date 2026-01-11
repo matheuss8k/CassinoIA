@@ -123,7 +123,12 @@ const deal = async (userId, bets) => {
     const currentRoi = getRoiString(user, totalBet, finalPayout);
     logGameResult('BACCARAT', user.username, finalPayout - totalBet, user.sessionProfit, risk.level, engineAdjustment, currentRoi);
     saveGameLog(user._id, 'BACCARAT', totalBet, finalPayout, { winner: simulation.winner, pScore: simulation.pScore, bScore: simulation.bScore }, risk.level, engineAdjustment, user.lastTransactionId).catch(console.error);
-    const newTrophies = await AchievementSystem.check(user._id, { game: 'BACCARAT', bet: totalBet, payout: finalPayout, extra: { winner: simulation.winner, isNatural: simulation.natural } });
+    
+    // SAFE ACHIEVEMENT CHECK
+    let newTrophies = [];
+    if (AchievementSystem?.check) {
+        newTrophies = await AchievementSystem.check(user._id, { game: 'BACCARAT', bet: totalBet, payout: finalPayout, extra: { winner: simulation.winner, isNatural: simulation.natural } });
+    }
 
     return {
         pHand: simulation.pHand, bHand: simulation.bHand,

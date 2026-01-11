@@ -257,5 +257,11 @@ export const DatabaseService = {
   purchaseItem: async (userId: string, itemId: string, cost: number) => {
       const response = await fetchWithRetry(`${API_URL}/store/purchase`, { method: 'POST', body: JSON.stringify({ userId, itemId, cost }) });
       return handleResponse(response);
+  },
+
+  // --- NEW: CLAIM MISSION ---
+  claimMission: async (userId: string, missionId: string) => {
+      const response = await fetchWithRetry(`${API_URL}/user/mission/claim`, { method: 'POST', body: JSON.stringify({ missionId }) });
+      return handleResponse(response);
   }
 };

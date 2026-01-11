@@ -100,7 +100,12 @@ const spin = async (userId, amount) => {
     const currentRoi = getRoiString(user, amount, win);
     logGameResult('TIGER', user.username, win - amount, user.sessionProfit, risk.level, engineAdjustment, currentRoi);
     saveGameLog(user._id, 'TIGER', amount, win, { grid, outcome }, risk.level, engineAdjustment, user.lastTransactionId).catch(console.error);
-    const newTrophies = await AchievementSystem.check(user._id, { game: 'TIGER', bet: amount, payout: win, extra: { previousLosses: prevLosses, lossStreakBroken: win > amount, isFullScreen: fs } });
+    
+    // SAFE ACHIEVEMENT CHECK
+    let newTrophies = [];
+    if (AchievementSystem?.check) {
+        newTrophies = await AchievementSystem.check(user._id, { game: 'TIGER', bet: amount, payout: win, extra: { previousLosses: prevLosses, lossStreakBroken: win > amount, isFullScreen: fs } });
+    }
     
     return { grid, totalWin: win, winningLines: lines, isFullScreen: fs, newBalance: (await User.findById(user._id)).balance, publicSeed: crypto.randomBytes(16).toString('hex'), newTrophies, loyaltyPoints: user.loyaltyPoints, completedMissions, missions: currentAllMissions };
 };

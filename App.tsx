@@ -9,6 +9,7 @@ import { LogOut, Wallet, ChevronLeft, TrendingUp, TrendingDown, Users, ShieldAle
 import { Button } from './components/UI/Button';
 import { AchievementToast } from './components/UI/AchievementToast';
 import { Avatar } from './components/UI/Avatar';
+import { MissionsHUD } from './components/UI/MissionsHUD'; // Importação do novo HUD
 
 // --- LAZY LOADING ---
 const Dashboard = lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -179,6 +180,9 @@ const AppLayout = ({ user, children, onLogout, onOpenWallet }: { user: User, chi
                     {children}
                 </Suspense>
             </main>
+            
+            {/* HUD DE MISSÕES GLOBAL */}
+            <MissionsHUD user={user} />
         </div>
     );
 };

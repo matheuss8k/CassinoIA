@@ -1,7 +1,7 @@
 
 const { User, GameSession } = require('../models');
 const { processTransaction, AchievementSystem, MissionSystem } = require('../engine');
-const { STORE_ITEMS } = require('../utils');
+const { STORE_ITEMS, logEvent } = require('../utils');
 
 const getBalance = async (req, res) => {
     const { newBalance } = req.body; 
@@ -15,9 +15,9 @@ const getBalance = async (req, res) => {
         const type = diff > 0 ? 'DEPOSIT' : 'WITHDRAW';
         await processTransaction(user._id, diff, type, 'WALLET', `MANUAL_${Date.now()}`);
         
-        // CHECK DEPOSIT ACHIEVEMENTS
-        if (type === 'DEPOSIT') {
-            const newTrophies = await AchievementSystem.check(user._id, { game: 'DEPOSIT', amount: diff });
+        // CHECK DEPOSIT ACHIEVEMENTS (SAFE)
+        if (type === 'DEPOSIT' && AchievementSystem?.check) {
+            await AchievementSystem.check(user._id, { game: 'DEPOSIT', amount: diff }).catch(e => console.error(e));
         }
 
         res.json({ success: true });
@@ -36,7 +36,6 @@ const syncUser = async (req, res) => {
 
     // --- MISSION DAILY CHECK ---
     // A função ensureDailySync agora retorna as missões atualizadas
-    // Precisamos atribuir isso ao objeto userFetch antes de enviá-lo ao frontend
     const syncedMissions = await MissionSystem.ensureDailySync(userFetch);
     
     // Normalize User Object
@@ -145,4 +144,54 @@ const purchaseItem = async (req, res) => {
     } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
-module.exports = { getBalance, syncUser, toggleFavorite, equipItem, verifyUser, purchaseItem, getStore };
+// --- NEW: CLAIM MISSION REWARD ---
+const claimMission = async (req, res) => {
+    try {
+        const { missionId } = req.body;
+        
+        // Atomic Check & Update
+        // Encontra o usuário que tenha a missão com o ID, Completed=true e Claimed!=true
+        // E já atualiza claimed=true e adiciona os pontos
+        const user = await User.findById(req.user.id);
+        if (!user) return res.sendStatus(404);
+
+        const mission = user.missions.find(m => m.id === missionId);
+        
+        if (!mission) return res.status(404).json({ message: "Missão não encontrada." });
+        if (!mission.completed) return res.status(400).json({ message: "Missão incompleta." });
+        if (mission.claimed) return res.status(400).json({ message: "Recompensa já resgatada." });
+
+        // Executa a transação atômica
+        // Usamos $inc para os pontos e $set para marcar a missão específica como claimed
+        const result = await User.findOneAndUpdate(
+            { 
+                _id: req.user.id, 
+                "missions.id": missionId,
+                "missions.completed": true,
+                "missions.claimed": { $ne: true } // Garante que não foi claimada
+            },
+            {
+                $set: { "missions.$.claimed": true },
+                $inc: { loyaltyPoints: mission.rewardPoints }
+            },
+            { new: true }
+        );
+
+        if (!result) {
+            return res.status(400).json({ message: "Erro ao processar resgate. Tente novamente." });
+        }
+
+        logEvent('METRIC', `🎁 Mission Reward Claimed: ${mission.description} (+${mission.rewardPoints}) by ${user.username}`);
+
+        res.json({ 
+            success: true, 
+            newPoints: result.loyaltyPoints, 
+            missions: result.missions 
+        });
+
+    } catch (e) {
+        res.status(500).json({ message: e.message });
+    }
+};
+
+module.exports = { getBalance, syncUser, toggleFavorite, equipItem, verifyUser, purchaseItem, getStore, claimMission };

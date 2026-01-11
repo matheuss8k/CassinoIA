@@ -133,9 +133,12 @@ const deal = async (userId, amount, sideBets) => {
          const prevLosses = userFetch.consecutiveLosses;
          await User.updateOne({ _id: user._id }, { $set: { lastBetResult: payout > 0 ? 'WIN' : 'LOSS', previousBet: amount }, $unset: { activeGame: "" }, $inc: { consecutiveWins: payout > 0 ? 1 : 0, consecutiveLosses: payout > 0 ? 0 : 1 } });
          
-         newTrophies = await AchievementSystem.check(user._id, { 
-             game: 'BLACKJACK', bet: totalBet, payout, extra: { isBlackjack: result === 'BLACKJACK', previousLosses: prevLosses, lossStreakBroken: payout > 0 } 
-         });
+         // SAFE CHECK
+         if (AchievementSystem?.check) {
+             newTrophies = await AchievementSystem.check(user._id, { 
+                 game: 'BLACKJACK', bet: totalBet, payout, extra: { isBlackjack: result === 'BLACKJACK', previousLosses: prevLosses, lossStreakBroken: payout > 0 } 
+             });
+         }
     } else {
          user = await processTransaction(userId, -totalBet, 'BET', 'BLACKJACK', null, gameState);
     }
@@ -184,7 +187,9 @@ const hit = async (userId) => {
         logGameResult('BLACKJACK', user.username, -g.bet, 0, g.riskLevel, engineAdjustment, currentRoi);
         saveGameLog(userId, 'BLACKJACK', g.bet, 0, { result: 'BUST' }, g.riskLevel, engineAdjustment).catch(console.error);
         
-        newTrophies = await AchievementSystem.check(userId, { game: 'BLACKJACK', bet: g.bet, payout: 0 });
+        if (AchievementSystem?.check) {
+            newTrophies = await AchievementSystem.check(userId, { game: 'BLACKJACK', bet: g.bet, payout: 0 });
+        }
     } else {
         await GameSession.updateOne({ userId }, { bjPlayerHand: g.bjPlayerHand, bjDeck: g.bjDeck, updatedAt: new Date() });
     }
@@ -250,9 +255,12 @@ const stand = async (userId) => {
     logGameResult('BLACKJACK', user.username, payout - g.bet, 0, g.riskLevel, engineAdjustment, currentRoi);
     saveGameLog(userId, 'BLACKJACK', g.bet, payout, { dScore, pScore, result }, g.riskLevel, engineAdjustment, processedUser.lastTransactionId).catch(console.error);
     
-    const newTrophies = await AchievementSystem.check(userId, { 
-        game: 'BLACKJACK', bet: g.bet, payout, extra: { isBlackjack: false, previousLosses: prevLosses, lossStreakBroken: payout > 0 } 
-    });
+    let newTrophies = [];
+    if (AchievementSystem?.check) {
+        newTrophies = await AchievementSystem.check(userId, { 
+            game: 'BLACKJACK', bet: g.bet, payout, extra: { isBlackjack: false, previousLosses: prevLosses, lossStreakBroken: payout > 0 } 
+        });
+    }
     
     return { dealerHand: g.bjDealerHand, status: 'GAME_OVER', result, newBalance: processedUser.balance, newTrophies, completedMissions, missions: currentAllMissions };
 };

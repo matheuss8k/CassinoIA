@@ -29,6 +29,7 @@ export interface Mission {
   current: number;
   rewardPoints: number; // Only Points remain
   completed: boolean;
+  claimed?: boolean; // New: Controls if the reward was manually collected
 }
 
 export interface Trophy {

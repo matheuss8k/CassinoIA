@@ -35,6 +35,8 @@ router.post('/user/equip', authenticateToken, validateRequest(z.object({ itemId:
 router.post('/user/verify', authenticateToken, UserController.verifyUser);
 router.get('/store', authenticateToken, UserController.getStore); 
 router.post('/store/purchase', authenticateToken, lockUserAction, validateRequest(z.object({ itemId: z.string(), cost: z.number().int().positive() })), UserController.purchaseItem);
+// NEW: Mission Claim
+router.post('/user/mission/claim', authenticateToken, lockUserAction, validateRequest(z.object({ missionId: z.string() })), UserController.claimMission);
 
 // --- GAMES ---
 router.post('/game/forfeit', authenticateToken, lockUserAction, GameController.forfeitGame);

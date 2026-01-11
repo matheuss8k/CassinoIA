@@ -75,7 +75,11 @@ const reveal = async (userId, tileId) => {
         const currentRoi = getRoiString(user, g.bet, 0);
         logGameResult('MINES', user.username, -g.bet, 0, g.riskLevel, adjustmentLog, currentRoi);
         saveGameLog(userId, 'MINES', g.bet, 0, { outcome: 'BOMB', minesCount: g.minesCount }, g.riskLevel, adjustmentLog).catch(console.error);
-        AchievementSystem.check(userId, { game: 'MINES', bet: g.bet, payout: 0 });
+        
+        // SAFE ACHIEVEMENT CHECK
+        if (AchievementSystem?.check) {
+            AchievementSystem.check(userId, { game: 'MINES', bet: g.bet, payout: 0 }).catch(e => console.error("Achv Error:", e));
+        }
         
         return { outcome: 'BOMB', mines: visualMines, status: 'GAME_OVER', newBalance: user.balance, loyaltyPoints: user.loyaltyPoints, completedMissions: [] };
     }
@@ -144,7 +148,12 @@ const cashout = async (userId) => {
     const currentRoi = getRoiString(processedUser, g.bet, profit);
     logGameResult('MINES', user.username, profit - g.bet, profit, g.riskLevel, null, currentRoi);
     saveGameLog(userId, 'MINES', g.bet, profit, { outcome: 'CASHOUT', multiplier: g.minesMultiplier }, g.riskLevel, null, processedUser.lastTransactionId).catch(console.error);
-    const newTrophies = await AchievementSystem.check(userId, { game: 'MINES', bet: g.bet, payout: profit, extra: { revealedCount: g.minesRevealed.length, previousLosses: prevLosses, lossStreakBroken: true, multiplier: g.minesMultiplier } });
+    
+    // SAFE ACHIEVEMENT CHECK
+    let newTrophies = [];
+    if (AchievementSystem?.check) {
+        newTrophies = await AchievementSystem.check(userId, { game: 'MINES', bet: g.bet, payout: profit, extra: { revealedCount: g.minesRevealed.length, previousLosses: prevLosses, lossStreakBroken: true, multiplier: g.minesMultiplier } });
+    }
     
     return { success: true, profit, newBalance: processedUser.balance, mines: g.minesList, newTrophies, loyaltyPoints: processedUser.loyaltyPoints, completedMissions, missions: currentAllMissions };
 };
